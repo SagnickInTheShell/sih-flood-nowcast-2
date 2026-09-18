@@ -51,6 +51,20 @@ export interface CriticalAccessRisk {
   message: string;
 }
 
+export interface RouteOption {
+  id: string;
+  name: string;
+  tag: string;
+  geometry: GeoLineString;
+  eta_seconds: number;
+  eta_minutes: number;
+  distance_km: number;
+  flooded_segments_count: number;
+  avoided_flooded_segments: string[];
+  is_safe: boolean;
+  summary: string;
+}
+
 export interface RouteResponse {
   route_geometry: GeoLineString;
   eta_seconds: number;
@@ -58,6 +72,25 @@ export interface RouteResponse {
   baseline_route_geometry: GeoLineString;
   baseline_eta_seconds: number;
   critical_access_risk: CriticalAccessRisk | null;
+  routes?: RouteOption[];
+  active_vehicle?: string;
+}
+
+export interface HourlyRainfall {
+  time_label: string;
+  rainfall_mm_hr: number;
+  type: string;
+}
+
+export interface WeatherNowcastResponse {
+  city: string;
+  current_rainfall_mm_hr: number;
+  vs_last_hour_pct: number;
+  temperature_c: number;
+  humidity_pct: number;
+  condition: string;
+  hourly_forecast: HourlyRainfall[];
+  source: string;
 }
 
 export interface CriticalInfraItem {
@@ -82,21 +115,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getScenarios: () => request<ScenarioSummary[]>("/api/scenarios"),
-  // Cached, instant lookup for a preset scenario -- computed once at
-  // backend startup. Never use `simulate()` for a preset click; that
-  // path always recomputes live (GNN inference + road graph +
-  // criticality), which is what made preset clicks slow.
   getScenarioDetail: (scenarioId: string) => request<SimulateResponse>(`/api/scenarios/${scenarioId}`),
   getCriticalInfrastructure: () => request<CriticalInfraItem[]>("/api/critical-infrastructure"),
+  getWeatherNowcast: () => request<WeatherNowcastResponse>("/api/weather/nowcast"),
   simulate: (rainfall_intensity_mm_hr: number, duration_min: number) =>
     request<SimulateResponse>("/api/simulate", {
       method: "POST",
       body: JSON.stringify({ rainfall_intensity_mm_hr, duration_min }),
     }),
-  route: (start: LatLng, end: LatLng, scenario_id: string, algorithm: "astar" | "dijkstra" = "astar") =>
+  route: (
+    start: LatLng,
+    end: LatLng,
+    scenario_id: string,
+    algorithm: "astar" | "dijkstra" = "astar",
+    vehicle_type: "ambulance" | "fire" | "rescue" | "police" = "ambulance"
+  ) =>
     request<RouteResponse>("/api/route", {
       method: "POST",
-      body: JSON.stringify({ start, end, scenario_id, algorithm }),
+      body: JSON.stringify({ start, end, scenario_id, algorithm, vehicle_type }),
     }),
   liveSocketUrl: (scenario_id: string) =>
     `${BASE_URL.replace(/^http/, "ws")}/ws/live?scenario_id=${scenario_id}`,

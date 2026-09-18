@@ -60,6 +60,34 @@ def shortest_path_astar(g: nx.Graph, source, target, assumed_speed_ms: float = 5
     return path, cost
 
 
+def path_length_km(g: nx.Graph, path: list[str]) -> float:
+    total_m = sum(g.get_edge_data(a, b).get("length_m", 80.0) for a, b in zip(path[:-1], path[1:]))
+    return round(max(total_m / 1000.0, 0.5), 1)
+
+
+path_distance_km = path_length_km
+
+
+def find_alternate_path(g: nx.Graph, source, target, primary_path: list[str]):
+    """Find a diverse alternative route avoiding the primary route edges where possible."""
+    if len(primary_path) < 3:
+        return primary_path, sum(edge_cost(g.get_edge_data(a, b)) for a, b in zip(primary_path[:-1], primary_path[1:]))
+    
+    g_alt = g.copy()
+    # Penalize primary edges to encourage diverse detour
+    for a, b in zip(primary_path[:-1], primary_path[1:]):
+        if g_alt.has_edge(a, b):
+            g_alt[a][b]["base_travel_time_s"] = g_alt[a][b].get("base_travel_time_s", 10.0) * 3.5
+
+    try:
+        alt_p, _ = shortest_path_dijkstra(g_alt, source, target)
+        # Compute true cost on original g
+        true_cost = sum(edge_cost(g.get_edge_data(a, b)) for a, b in zip(alt_p[:-1], alt_p[1:]))
+        return alt_p, true_cost
+    except Exception:
+        return primary_path, sum(edge_cost(g.get_edge_data(a, b)) for a, b in zip(primary_path[:-1], primary_path[1:]))
+
+
 def nearest_node(g: nx.Graph, lat: float, lng: float) -> str:
     best, best_d = None, math.inf
     for node, data in g.nodes(data=True):

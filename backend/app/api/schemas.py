@@ -47,11 +47,26 @@ class LatLng(BaseModel):
     lng: float
 
 
+class RouteOption(BaseModel):
+    id: str
+    name: str
+    tag: str
+    geometry: dict[str, Any]
+    eta_seconds: float
+    eta_minutes: int
+    distance_km: float
+    flooded_segments_count: int
+    avoided_flooded_segments: list[str]
+    is_safe: bool
+    summary: str
+
+
 class RouteRequest(BaseModel):
     start: LatLng
     end: LatLng
     scenario_id: str
     algorithm: Literal["astar", "dijkstra"] = "astar"
+    vehicle_type: Literal["ambulance", "fire", "rescue", "police"] = "ambulance"
 
 
 class CriticalAccessRiskSchema(BaseModel):
@@ -69,6 +84,8 @@ class RouteResponse(BaseModel):
     baseline_route_geometry: dict[str, Any]
     baseline_eta_seconds: float
     critical_access_risk: CriticalAccessRiskSchema | None = None
+    routes: list[RouteOption] = []
+    active_vehicle: str = "ambulance"
 
 
 class CriticalInfraSchema(BaseModel):

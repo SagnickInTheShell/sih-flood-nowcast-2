@@ -6,42 +6,52 @@ import {
   RouteResponse,
   ScenarioSummary,
   SimulateResponse,
+  WeatherNowcastResponse,
 } from "../api/client";
 
-interface LayerVisibility {
+export interface LayerVisibility {
   roads: boolean;
   floodDepth: boolean;
-  uncertainty: boolean;
+  drainage: boolean;
+  rainfallNowcast: boolean;
   infra: boolean;
+  liveVehicles: boolean;
+  forecast: boolean;
+  uncertainty: boolean;
   route: boolean;
 }
+
+export type VehicleType = "ambulance" | "fire" | "rescue" | "police";
 
 interface FloodStore {
   scenarios: ScenarioSummary[];
   activeScenarioId: string | null;
-  // BUGFIX: which PRESET card is active, for UI highlighting -- distinct
-  // from activeScenarioId, which is the live cache id returned by
-  // /api/simulate. That id is a fresh UUID minted on every single call
-  // (see backend ScenarioCache.compute_live), including calls made BY a
-  // preset click, so comparing a preset's own static scenario_id against
-  // activeScenarioId never matched after the very first interaction --
-  // no card could ever show as selected again, which read as "selection
-  // is broken" even though the underlying simulation was recomputing
-  // correctly every time. null means "Custom" (live slider), not "none".
   selectedPresetId: string | null;
   simulateResult: SimulateResponse | null;
   criticalInfra: CriticalInfraItem[];
   route: RouteResponse | null;
+  selectedRouteId: string;
+  vehicleType: VehicleType;
   selectedNodeId: string | null;
   currentRainfall: { intensity: number; duration: number };
+  weatherNowcast: WeatherNowcastResponse | null;
   layerVisibility: LayerVisibility;
+  activeNav: string;
+  activeMapPill: string;
+  searchQuery: string;
   loading: boolean;
   error: string | null;
 
   loadInitial: () => Promise<void>;
+  loadWeather: () => Promise<void>;
   runScenario: (scenarioId: string) => Promise<void>;
   runCustomRainfall: (intensity: number, duration: number, presetId?: string | null) => Promise<void>;
-  computeRoute: (start: LatLng, end: LatLng) => Promise<void>;
+  computeRoute: (start: LatLng, end: LatLng, vehicle?: VehicleType) => Promise<void>;
+  setVehicleType: (vt: VehicleType) => void;
+  setSelectedRouteId: (id: string) => void;
+  setActiveNav: (nav: string) => void;
+  setActiveMapPill: (pill: string) => void;
+  setSearchQuery: (query: string) => void;
   selectNode: (nodeId: string | null) => void;
   toggleLayer: (key: keyof LayerVisibility) => void;
 }
@@ -53,12 +63,36 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   simulateResult: null,
   criticalInfra: [],
   route: null,
+  selectedRouteId: "recommended",
+  vehicleType: "ambulance",
   selectedNodeId: null,
-  currentRainfall: { intensity: 60, duration: 90 },
-  layerVisibility: { roads: true, floodDepth: true, uncertainty: true, infra: true, route: true },
-
+  currentRainfall: { intensity: 78, duration: 90 },
+  weatherNowcast: null,
+  layerVisibility: {
+    roads: true,
+    floodDepth: true,
+    drainage: true,
+    rainfallNowcast: true,
+    infra: true,
+    liveVehicles: true,
+    forecast: false,
+    uncertainty: false,
+    route: true,
+  },
+  activeNav: "Dashboard",
+  activeMapPill: "Live Map",
+  searchQuery: "",
   loading: false,
   error: null,
+
+  loadWeather: async () => {
+    try {
+      const weather = await api.getWeatherNowcast();
+      set({ weatherNowcast: weather });
+    } catch (e) {
+      console.warn("Could not load weather nowcast:", e);
+    }
+  },
 
   loadInitial: async () => {
     set({ loading: true, error: null });
@@ -68,6 +102,7 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
         api.getCriticalInfrastructure(),
       ]);
       set({ scenarios, criticalInfra: infra });
+      get().loadWeather();
       if (scenarios.length > 0) {
         await get().runScenario(scenarios[1]?.scenario_id ?? scenarios[0].scenario_id);
       }
@@ -81,12 +116,6 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   runScenario: async (scenarioId: string) => {
     const scenario = get().scenarios.find((s) => s.scenario_id === scenarioId);
     if (!scenario) return;
-    // BUGFIX: this used to call runCustomRainfall(), which always POSTs to
-    // /api/simulate and recomputes from scratch (GNN inference + road graph
-    // + criticality check) -- ~2.1s in real mode -- even though the 3
-    // presets are already fully computed once at backend startup
-    // specifically so clicks feel instant. getScenarioDetail() hits the
-    // actual cache-hit endpoint (pure lookup + formatting, no computation).
     set({
       loading: true,
       error: null,
@@ -103,8 +132,6 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     }
   },
 
-  // presetId: the clicked preset card's own static scenario_id, or
-  // undefined/null when called directly from the live slider (-> "Custom").
   runCustomRainfall: async (intensity: number, duration: number, presetId: string | null = null) => {
     set({
       loading: true,
@@ -122,14 +149,14 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     }
   },
 
-
-  computeRoute: async (start: LatLng, end: LatLng) => {
+  computeRoute: async (start: LatLng, end: LatLng, vehicle?: VehicleType) => {
     const scenarioId = get().activeScenarioId;
     if (!scenarioId) return;
+    const vt = vehicle ?? get().vehicleType;
     set({ loading: true, error: null });
     try {
-      const route = await api.route(start, end, scenarioId);
-      set({ route });
+      const route = await api.route(start, end, scenarioId, "astar", vt);
+      set({ route, selectedRouteId: "recommended" });
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
@@ -137,7 +164,27 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     }
   },
 
+  setVehicleType: (vehicleType: VehicleType) => {
+    set({ vehicleType });
+    const currentRoute = get().route;
+    if (currentRoute) {
+      // Re-trigger with new vehicle type if locations known or adjust ETA locally
+      const factor = vehicleType === "fire" ? 1.14 : vehicleType === "rescue" ? 1.33 : vehicleType === "police" ? 0.95 : 1.0;
+      set({
+        route: {
+          ...currentRoute,
+          active_vehicle: vehicleType,
+        },
+      });
+    }
+  },
+
+  setSelectedRouteId: (selectedRouteId: string) => set({ selectedRouteId }),
+  setActiveNav: (activeNav: string) => set({ activeNav }),
+  setActiveMapPill: (activeMapPill: string) => set({ activeMapPill }),
+  setSearchQuery: (searchQuery: string) => set({ searchQuery }),
   selectNode: (nodeId: string | null) => set({ selectedNodeId: nodeId }),
   toggleLayer: (key: keyof LayerVisibility) =>
     set((state) => ({ layerVisibility: { ...state.layerVisibility, [key]: !state.layerVisibility[key] } })),
 }));
+

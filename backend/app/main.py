@@ -13,6 +13,7 @@ from app.api import (
     routes_route,
     routes_scenarios,
     routes_simulate,
+    routes_weather,
     ws_live,
 )
 from app.core.config import settings
@@ -48,6 +49,7 @@ app.include_router(routes_route.router)
 app.include_router(routes_infra.router)
 app.include_router(routes_backtest.router)
 app.include_router(routes_explain.router)
+app.include_router(routes_weather.router)
 app.include_router(ws_live.router)
 
 
