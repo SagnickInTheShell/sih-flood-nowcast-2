@@ -33,6 +33,7 @@ interface FloodStore {
   criticalInfra: CriticalInfraItem[];
   route: RouteResponse | null;
   selectedNodeId: string | null;
+  currentRainfall: { intensity: number; duration: number };
   layerVisibility: LayerVisibility;
   loading: boolean;
   error: string | null;
@@ -53,7 +54,9 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   criticalInfra: [],
   route: null,
   selectedNodeId: null,
+  currentRainfall: { intensity: 60, duration: 90 },
   layerVisibility: { roads: true, floodDepth: true, uncertainty: true, infra: true, route: true },
+
   loading: false,
   error: null,
 
@@ -84,7 +87,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     // presets are already fully computed once at backend startup
     // specifically so clicks feel instant. getScenarioDetail() hits the
     // actual cache-hit endpoint (pure lookup + formatting, no computation).
-    set({ loading: true, error: null, selectedPresetId: scenarioId });
+    set({
+      loading: true,
+      error: null,
+      selectedPresetId: scenarioId,
+      currentRainfall: { intensity: scenario.rainfall_intensity_mm_hr, duration: scenario.duration_min },
+    });
     try {
       const result = await api.getScenarioDetail(scenarioId);
       set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
@@ -98,7 +106,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   // presetId: the clicked preset card's own static scenario_id, or
   // undefined/null when called directly from the live slider (-> "Custom").
   runCustomRainfall: async (intensity: number, duration: number, presetId: string | null = null) => {
-    set({ loading: true, error: null, selectedPresetId: presetId });
+    set({
+      loading: true,
+      error: null,
+      selectedPresetId: presetId,
+      currentRainfall: { intensity, duration },
+    });
     try {
       const result = await api.simulate(intensity, duration);
       set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
@@ -108,6 +121,7 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
       set({ loading: false });
     }
   },
+
 
   computeRoute: async (start: LatLng, end: LatLng) => {
     const scenarioId = get().activeScenarioId;

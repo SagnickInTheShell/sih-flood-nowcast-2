@@ -2,7 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #eaf4fa;
-  margin: 0;
+@layer base {
+  body {
+    background-color: #060d19;
+    color: #f1f5f9;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
 }
+
+/* Custom sleek scrollbar for dashboard panels */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #091424;
+}
+::-webkit-scrollbar-thumb {
+  background: #1b365d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00A8B5;
+}
+

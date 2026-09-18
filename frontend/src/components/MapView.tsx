@@ -8,14 +8,9 @@ import { stateColor } from "../theme";
 
 const ANCHOR = { lat: 12.9716, lng: 77.5946 };
 
-// ASSUMPTION: CARTO's free "Positron" basemap style needs no API key and
-// gives a real street-level look (roads, place labels, water) even though
-// the synthetic ward's own road grid is a fictional overlay on top of it --
-// swap for a production-licensed style (e.g. MapTiler, Stadia Maps) before
-// real deployment. Demotiles (MapLibre's own placeholder style) rendered
-// almost nothing at demo zoom levels, which read as a blank/abstract
-// background; Positron actually looks like a map.
-const BASEMAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+// CARTO Dark Matter GL style for high-contrast dark dashboard aesthetic
+const BASEMAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
 
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -49,11 +44,6 @@ export default function MapView() {
     // critical-infrastructure site that is ACTUALLY at risk under the
     // current scenario (zero access redundancy), falling back to the
     // first known site if nothing is at risk yet (e.g. light rain).
-    // BUGFIX: this used to always target criticalInfra[0] -- fine for the
-    // synthetic ward, where the hospital is deliberately sited to be
-    // vulnerable, but in real mode (many facilities, no deliberate siting)
-    // the first one in the list has no guaranteed relationship to which
-    // facility is actually cut off right now.
     map.on("click", (e) => {
       const state = useFloodStore.getState();
       const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
@@ -98,7 +88,7 @@ export default function MapView() {
             })),
           },
           getLineColor: (f: any) => [...(stateColor[f.properties.state] ?? stateColor.clear), 255],
-          getLineWidth: (f: any) => (f.properties.state === "flooded" ? 7 : 5),
+          getLineWidth: (f: any) => (f.properties.state === "flooded" ? 8 : 5),
           widthUnits: "pixels",
           lineWidthMinPixels: 4,
           capRounded: true,
@@ -115,27 +105,22 @@ export default function MapView() {
           data: simulateResult.node_predictions,
           getPosition: (d: any) => [d.lng, d.lat],
           getWeight: (d: any) => Math.max(d.depth_m_mean, 0.001),
-          // USABILITY: reduced radius/intensity and capped max alpha well
-          // below opaque (was 255) so roads stay legible underneath even
-          // at a flooded hotspot's centre, instead of being fully covered.
           radiusPixels: 55,
-          intensity: 1.1,
+          intensity: 1.2,
           threshold: 0.03,
           aggregation: "SUM",
           colorRange: [
-            [234, 244, 250, 0],
-            [187, 222, 217, 50],
-            [232, 163, 61, 80],
-            [232, 163, 61, 115],
-            [192, 57, 43, 150],
-            [140, 25, 18, 190],
+            [6, 13, 25, 0],
+            [0, 168, 181, 75],
+            [232, 163, 61, 120],
+            [239, 68, 68, 160],
+            [185, 28, 28, 210],
           ],
         }),
       );
     }
 
-    // Uncertainty is rendered as its own translucent overlay -- visible,
-    // never hidden behind the mean-depth heatmap (§8.2).
+    // Uncertainty rendered as translucent cyan halo overlay
     if (simulateResult && layerVisibility.uncertainty) {
       layers.push(
         new GeoJsonLayer({
@@ -149,9 +134,9 @@ export default function MapView() {
             })),
           },
           pointType: "circle",
-          getFillColor: [0, 168, 181, 70],
-          getLineColor: [0, 168, 181, 160],
-          lineWidthMinPixels: 1,
+          getFillColor: [0, 210, 224, 50],
+          getLineColor: [0, 210, 224, 180],
+          lineWidthMinPixels: 1.5,
           getPointRadius: (f: any) => 8 + f.properties.std * 250,
           pointRadiusUnits: "pixels",
           pickable: true,
@@ -174,10 +159,10 @@ export default function MapView() {
           },
           pointType: "circle",
           getFillColor: [232, 163, 61, 255],
-          getLineColor: [11, 37, 69, 255],
-          getLineWidth: 2.5,
+          getLineColor: [6, 13, 25, 255],
+          getLineWidth: 3,
           lineWidthMinPixels: 2,
-          getPointRadius: 11,
+          getPointRadius: 12,
           pointRadiusUnits: "pixels",
           pickable: true,
         }),
@@ -190,7 +175,7 @@ export default function MapView() {
           id: "baseline-route",
           data: [{ path: route.baseline_route_geometry.coordinates }],
           getPath: (d: any) => d.path,
-          getColor: [148, 163, 184, 210],
+          getColor: [148, 163, 184, 180], // Muted slate baseline
           getWidth: 5,
           widthMinPixels: 4,
           capRounded: true,
@@ -199,8 +184,8 @@ export default function MapView() {
           id: "active-route",
           data: [{ path: route.route_geometry.coordinates }],
           getPath: (d: any) => d.path,
-          getColor: [31, 107, 87, 255],
-          getWidth: 6,
+          getColor: [16, 185, 129, 255], // Glowing emerald safe route
+          getWidth: 7,
           widthMinPixels: 5,
           capRounded: true,
         }),
@@ -210,5 +195,6 @@ export default function MapView() {
     overlayRef.current.setProps({ layers });
   }, [simulateResult, criticalInfra, route, layerVisibility, selectNode]);
 
-  return <div ref={containerRef} className="absolute inset-0" />;
+  return <div ref={containerRef} className="absolute inset-0 bg-[#060d17]" />;
 }
+

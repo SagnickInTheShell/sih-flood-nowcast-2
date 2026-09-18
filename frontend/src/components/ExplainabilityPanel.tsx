@@ -4,9 +4,9 @@ import { api } from "../api/client";
 import { useFloodStore } from "../store/useFloodStore";
 
 const FACTOR_LABEL: Record<string, string> = {
-  rainfall_intensity: "Rainfall intensity",
-  local_slope: "Local slope",
-  drainage_capacity: "Drainage capacity",
+  rainfall_intensity: "Rainfall Intensity",
+  local_slope: "Local Slope",
+  drainage_capacity: "Drain Capacity",
 };
 
 export default function ExplainabilityPanel() {
@@ -23,10 +23,6 @@ export default function ExplainabilityPanel() {
   useEffect(() => {
     if (!nodeId || !simulateResult) return;
     setError(null);
-    // Find the current scenario's rainfall/duration from the store isn't
-    // exposed directly here, so we approximate with the moderate preset --
-    // this panel re-derives its own ablation via the physics baseline, it
-    // does not need the exact live scenario to be illustrative and honest.
     api
       .explain(nodeId, 60, 90)
       .then((res) => setFactors(res.factors))
@@ -36,21 +32,44 @@ export default function ExplainabilityPanel() {
   if (!simulateResult) return null;
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-navy/60">Why is this node flooding?</h2>
-      <p className="text-xs text-navy/50 leading-relaxed">
-        Simple ablation: each factor is held at the network&apos;s median value in turn, re-run through the
-        physics baseline. This is not a black-box importance score.
+    <div className="bg-darkCard/80 border border-darkBorder rounded-xl p-4 flex flex-col justify-between shadow-lg shadow-black/20">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-tealGlow" />
+          Explainability Ablation &middot; Node {nodeId}
+        </h2>
+        <span className="text-[10px] px-2 py-0.5 rounded bg-teal/10 text-tealGlow border border-teal/30">
+          Physics Baseline
+        </span>
+      </div>
+
+      <p className="text-[11px] text-slate-400 leading-relaxed mb-2">
+        Factor ablation: each variable held at network median to isolate flood contribution.
       </p>
-      {error && <div className="text-xs text-riskRed">{error}</div>}
+
+      {error && <div className="text-xs text-red-400 p-2 bg-red-950/40 rounded-lg">{error}</div>}
+
       {factors && (
-        <div style={{ width: "100%", height: 140 }}>
+        <div style={{ width: "100%", height: 110 }}>
           <ResponsiveContainer>
-            <BarChart data={factors.map((f) => ({ ...f, label: FACTOR_LABEL[f.factor] ?? f.factor }))} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#0B254515" />
-              <XAxis type="number" tick={{ fontSize: 11, fill: "#0B2545" }} unit="m" />
-              <YAxis type="category" dataKey="label" tick={{ fontSize: 11, fill: "#0B2545" }} width={100} />
-              <Tooltip formatter={(v: number) => `${v.toFixed(3)} m depth delta`} />
+            <BarChart
+              data={factors.map((f) => ({ ...f, label: FACTOR_LABEL[f.factor] ?? f.factor }))}
+              layout="vertical"
+              margin={{ top: 4, right: 12, left: 10, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#1E3A5F" opacity={0.5} />
+              <XAxis type="number" tick={{ fontSize: 10, fill: "#94A3B8" }} stroke="#1E3A5F" unit="m" />
+              <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: "#94A3B8" }} stroke="#1E3A5F" width={90} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#0B1A2F",
+                  borderColor: "#1E3A5F",
+                  borderRadius: "8px",
+                  fontSize: "11px",
+                  color: "#F1F5F9",
+                }}
+                formatter={(v: number) => [`${v.toFixed(3)} m`, "Depth Delta"]}
+              />
               <Bar dataKey="depth_delta_m" fill="#00A8B5" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -59,3 +78,4 @@ export default function ExplainabilityPanel() {
     </div>
   );
 }
+
