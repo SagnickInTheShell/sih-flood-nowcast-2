@@ -147,14 +147,35 @@ class RealWardProvider(WardDataProvider):
             mid_lat = (g.nodes[str(u)]["lat"] + g.nodes[str(v)]["lat"]) / 2
             mid_lng = (g.nodes[str(u)]["lng"] + g.nodes[str(v)]["lng"]) / 2
             has_drain = self._near_waterway(mid_lat, mid_lng)
+            # BUGFIX: osmnx simplifies the raw OSM graph by collapsing chains
+            # of degree-2 nodes into one edge between real intersections,
+            # storing the original road's true curved path as a `geometry`
+            # LineString on that edge (only present when it deviates from a
+            # straight line). Without capturing it, rendering/routing drew a
+            # straight chord directly between the two intersections instead
+            # -- for a long simplified stretch this cut a straight line
+            # across the map completely ignoring the actual road, which is
+            # exactly the road it was supposed to represent. `geometry_coords`
+            # is None (renderer falls back to the straight two-point line)
+            # only for edges that genuinely are straight.
+            geometry = data.get("geometry")
+            geometry_coords = [[float(x), float(y)] for x, y in geometry.coords] if geometry is not None else None
             g.add_edge(str(u), str(v), length_m=length_m, is_arterial=is_arterial,
-                       has_drain=has_drain, edge_id=f"r_{u}_{v}")
+                       has_drain=has_drain, edge_id=f"r_{u}_{v}", geometry_coords=geometry_coords)
         return g
 
     def get_road_graph(self) -> nx.Graph:
         return self._road_graph().copy()
 
-    def get_critical_infrastructure(self) -> list[CriticalInfra]:
+    @lru_cache(maxsize=1)
+    def _critical_infrastructure(self) -> tuple[CriticalInfra, ...]:
+        # BUGFIX: this was never cached, so every single scenario
+        # computation (every preset click, every slider drag -- anything
+        # that called ScenarioCache.compute_live) re-fetched the same 13
+        # facilities from the Overpass API. Measured at ~85ms per call
+        # (osmnx's own on-disk response cache kept it from being a full
+        # network round-trip, but it was still real, unnecessary work
+        # repeated on a request path meant to be instant).
         import osmnx as ox
 
         bbox = (self.min_lon, self.min_lat, self.max_lon, self.max_lat)
@@ -162,7 +183,7 @@ class RealWardProvider(WardDataProvider):
         try:
             feats = ox.features_from_bbox(bbox=bbox, tags=tags)
         except Exception:
-            return []
+            return ()
         out = []
         for idx, row in feats.iterrows():
             geom = row.geometry.centroid
@@ -181,4 +202,7 @@ class RealWardProvider(WardDataProvider):
             if not isinstance(name, str) or not name:
                 name = f"{infra_type}_{clean_id}"
             out.append(CriticalInfra(clean_id, infra_type, str(name), geom.y, geom.x))
-        return out
+        return tuple(out)
+
+    def get_critical_infrastructure(self) -> list[CriticalInfra]:
+        return list(self._critical_infrastructure())

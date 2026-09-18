@@ -115,17 +115,20 @@ export default function MapView() {
           data: simulateResult.node_predictions,
           getPosition: (d: any) => [d.lng, d.lat],
           getWeight: (d: any) => Math.max(d.depth_m_mean, 0.001),
-          radiusPixels: 90,
-          intensity: 1.5,
-          threshold: 0.02,
+          // USABILITY: reduced radius/intensity and capped max alpha well
+          // below opaque (was 255) so roads stay legible underneath even
+          // at a flooded hotspot's centre, instead of being fully covered.
+          radiusPixels: 55,
+          intensity: 1.1,
+          threshold: 0.03,
           aggregation: "SUM",
           colorRange: [
             [234, 244, 250, 0],
-            [187, 222, 217, 90],
-            [232, 163, 61, 140],
-            [232, 163, 61, 190],
-            [192, 57, 43, 220],
-            [140, 25, 18, 255],
+            [187, 222, 217, 50],
+            [232, 163, 61, 80],
+            [232, 163, 61, 115],
+            [192, 57, 43, 150],
+            [140, 25, 18, 190],
           ],
         }),
       );

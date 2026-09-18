@@ -81,5 +81,39 @@ def path_flooded_segments(g: nx.Graph, path: list[str]) -> list[str]:
     ]
 
 
+def _sqdist(a, b) -> float:
+    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+
 def path_to_geojson_linestring(g: nx.Graph, path: list[str]) -> dict:
-    return {"type": "LineString", "coordinates": [[g.nodes[n]["lng"], g.nodes[n]["lat"]] for n in path]}
+    # BUGFIX: this used to connect each path node's own (lng, lat) directly,
+    # which for a real-mode road graph skips over osmnx's simplified edges'
+    # true curved geometry -- a route crossing one of those edges rendered
+    # as a straight chord cutting across the map, ignoring the actual road,
+    # for exactly the same reason road_segments rendering did (see
+    # routes_simulate.py's _edge_geojson). Use each edge's real geometry
+    # when present, stitched together in path order.
+    if len(path) < 2:
+        if path:
+            n = path[0]
+            return {"type": "LineString", "coordinates": [[g.nodes[n]["lng"], g.nodes[n]["lat"]]]}
+        return {"type": "LineString", "coordinates": []}
+
+    coords: list[list[float]] = []
+    for a, b in zip(path[:-1], path[1:]):
+        data = g.get_edge_data(a, b)
+        seg = data.get("geometry_coords") if data else None
+        if seg:
+            a_pos = (g.nodes[a]["lng"], g.nodes[a]["lat"])
+            if _sqdist(seg[0], a_pos) > _sqdist(seg[-1], a_pos):
+                seg = list(reversed(seg))
+        else:
+            seg = [
+                [g.nodes[a]["lng"], g.nodes[a]["lat"]],
+                [g.nodes[b]["lng"], g.nodes[b]["lat"]],
+            ]
+        if coords and coords[-1] == seg[0]:
+            coords.extend(seg[1:])
+        else:
+            coords.extend(seg)
+    return {"type": "LineString", "coordinates": coords}

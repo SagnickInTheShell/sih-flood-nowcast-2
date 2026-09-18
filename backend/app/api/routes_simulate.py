@@ -9,7 +9,20 @@ from app.scenarios.cache import cache
 router = APIRouter()
 
 
-def _edge_geojson(road_graph, u, v) -> dict:
+def _sqdist(a, b) -> float:
+    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+
+def _edge_geojson(road_graph, u, v, data: dict) -> dict:
+    coords = data.get("geometry_coords")
+    if coords:
+        # BUGFIX: real edge geometry (when present) is only rendered
+        # correctly if it actually runs u -> v; an undirected graph's
+        # edges() doesn't guarantee that orientation, so check and flip.
+        u_pos = (road_graph.nodes[u]["lng"], road_graph.nodes[u]["lat"])
+        if _sqdist(coords[0], u_pos) > _sqdist(coords[-1], u_pos):
+            coords = list(reversed(coords))
+        return {"type": "LineString", "coordinates": coords}
     return {
         "type": "LineString",
         "coordinates": [
@@ -19,10 +32,14 @@ def _edge_geojson(road_graph, u, v) -> dict:
     }
 
 
-@router.post("/api/simulate", response_model=SimulateResponse)
-def simulate(req: SimulateRequest) -> SimulateResponse:
-    scenario = cache.compute_live(req.rainfall_intensity_mm_hr, req.duration_min)
-
+def scenario_to_response(scenario) -> SimulateResponse:
+    """Converts an already-computed CachedScenario into the API shape --
+    pure formatting, no computation. Shared by the live-compute path
+    (POST /api/simulate) and the cached-lookup path (GET
+    /api/scenarios/{scenario_id}) so a cache hit is truly just this
+    formatting step, not a second copy of the compute logic that could
+    drift out of sync.
+    """
     node_predictions = [
         NodePrediction(
             node_id=node_id,
@@ -35,7 +52,10 @@ def simulate(req: SimulateRequest) -> SimulateResponse:
     ]
 
     road_segments = [
-        RoadSegment(edge_id=data["edge_id"], state=data["state"], geometry=_edge_geojson(scenario.road_graph, u, v))
+        RoadSegment(
+            edge_id=data["edge_id"], state=data["state"],
+            geometry=_edge_geojson(scenario.road_graph, u, v, data),
+        )
         for u, v, data in scenario.road_graph.edges(data=True)
     ]
 
@@ -47,3 +67,13 @@ def simulate(req: SimulateRequest) -> SimulateResponse:
         is_synthetic_ward=scenario.is_synthetic_ward,
         at_risk_infra_ids=[r.infra_id for r in scenario.critical_access_risks],
     )
+
+
+@router.post("/api/simulate", response_model=SimulateResponse)
+def simulate(req: SimulateRequest) -> SimulateResponse:
+    # NOTE: this path always computes live -- by design, it's the only
+    # thing the live rainfall slider should ever call (see
+    # routes_scenarios.py's GET /api/scenarios/{scenario_id} for the
+    # cached-instant path preset buttons use instead).
+    scenario = cache.compute_live(req.rainfall_intensity_mm_hr, req.duration_min)
+    return scenario_to_response(scenario)

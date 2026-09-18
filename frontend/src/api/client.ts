@@ -82,6 +82,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getScenarios: () => request<ScenarioSummary[]>("/api/scenarios"),
+  // Cached, instant lookup for a preset scenario -- computed once at
+  // backend startup. Never use `simulate()` for a preset click; that
+  // path always recomputes live (GNN inference + road graph +
+  // criticality), which is what made preset clicks slow.
+  getScenarioDetail: (scenarioId: string) => request<SimulateResponse>(`/api/scenarios/${scenarioId}`),
   getCriticalInfrastructure: () => request<CriticalInfraItem[]>("/api/critical-infrastructure"),
   simulate: (rainfall_intensity_mm_hr: number, duration_min: number) =>
     request<SimulateResponse>("/api/simulate", {

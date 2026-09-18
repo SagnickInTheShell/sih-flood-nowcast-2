@@ -19,6 +19,16 @@ interface LayerVisibility {
 interface FloodStore {
   scenarios: ScenarioSummary[];
   activeScenarioId: string | null;
+  // BUGFIX: which PRESET card is active, for UI highlighting -- distinct
+  // from activeScenarioId, which is the live cache id returned by
+  // /api/simulate. That id is a fresh UUID minted on every single call
+  // (see backend ScenarioCache.compute_live), including calls made BY a
+  // preset click, so comparing a preset's own static scenario_id against
+  // activeScenarioId never matched after the very first interaction --
+  // no card could ever show as selected again, which read as "selection
+  // is broken" even though the underlying simulation was recomputing
+  // correctly every time. null means "Custom" (live slider), not "none".
+  selectedPresetId: string | null;
   simulateResult: SimulateResponse | null;
   criticalInfra: CriticalInfraItem[];
   route: RouteResponse | null;
@@ -29,7 +39,7 @@ interface FloodStore {
 
   loadInitial: () => Promise<void>;
   runScenario: (scenarioId: string) => Promise<void>;
-  runCustomRainfall: (intensity: number, duration: number) => Promise<void>;
+  runCustomRainfall: (intensity: number, duration: number, presetId?: string | null) => Promise<void>;
   computeRoute: (start: LatLng, end: LatLng) => Promise<void>;
   selectNode: (nodeId: string | null) => void;
   toggleLayer: (key: keyof LayerVisibility) => void;
@@ -38,6 +48,7 @@ interface FloodStore {
 export const useFloodStore = create<FloodStore>((set, get) => ({
   scenarios: [],
   activeScenarioId: null,
+  selectedPresetId: null,
   simulateResult: null,
   criticalInfra: [],
   route: null,
@@ -67,11 +78,27 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   runScenario: async (scenarioId: string) => {
     const scenario = get().scenarios.find((s) => s.scenario_id === scenarioId);
     if (!scenario) return;
-    await get().runCustomRainfall(scenario.rainfall_intensity_mm_hr, scenario.duration_min);
+    // BUGFIX: this used to call runCustomRainfall(), which always POSTs to
+    // /api/simulate and recomputes from scratch (GNN inference + road graph
+    // + criticality check) -- ~2.1s in real mode -- even though the 3
+    // presets are already fully computed once at backend startup
+    // specifically so clicks feel instant. getScenarioDetail() hits the
+    // actual cache-hit endpoint (pure lookup + formatting, no computation).
+    set({ loading: true, error: null, selectedPresetId: scenarioId });
+    try {
+      const result = await api.getScenarioDetail(scenarioId);
+      set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
+    } catch (e) {
+      set({ error: (e as Error).message });
+    } finally {
+      set({ loading: false });
+    }
   },
 
-  runCustomRainfall: async (intensity: number, duration: number) => {
-    set({ loading: true, error: null });
+  // presetId: the clicked preset card's own static scenario_id, or
+  // undefined/null when called directly from the live slider (-> "Custom").
+  runCustomRainfall: async (intensity: number, duration: number, presetId: string | null = null) => {
+    set({ loading: true, error: null, selectedPresetId: presetId });
     try {
       const result = await api.simulate(intensity, duration);
       set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
