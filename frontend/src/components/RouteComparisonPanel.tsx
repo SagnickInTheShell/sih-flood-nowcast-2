@@ -99,7 +99,7 @@ export default function RouteComparisonPanel() {
         distText: `${r.distance_km} km`,
         summaryText: r.summary,
         isSafe: r.is_safe,
-        color: r.id === "recommended" ? "emerald" : r.id === "shortest" ? "red" : "amber",
+        color: r.id === "recommended" ? "purple" : r.id === "shortest" ? "red" : "amber",
       }))
     : defaultRoutes;
 
@@ -112,8 +112,8 @@ export default function RouteComparisonPanel() {
         <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2">
           <span>Emergency Routing</span>
         </h2>
-        <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-[#00FF88]/15 text-[#00FF88] border border-[#00FF88]/40 flex items-center gap-1 shadow-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#00FF88]" />
+        <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-[#a855f7]/15 text-[#c084fc] border border-[#a855f7]/40 flex items-center gap-1 shadow-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#c084fc]" />
           Safe Route Available
         </span>
       </div>
@@ -215,7 +215,7 @@ export default function RouteComparisonPanel() {
               className={`p-3 rounded-xl border cursor-pointer transition-all ${
                 isSelected
                   ? r.id === "recommended"
-                    ? "bg-[#042824]/90 border-[#00FF88] shadow-[0_0_12px_rgba(0,255,136,0.2)]"
+                    ? "bg-[#271047]/90 border-[#a855f7] shadow-[0_0_12px_rgba(168,85,247,0.3)]"
                     : r.id === "shortest"
                     ? "bg-red-950/40 border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.2)]"
                     : "bg-[#2b220d]/80 border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.2)]"
@@ -225,7 +225,7 @@ export default function RouteComparisonPanel() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {r.id === "recommended" ? (
-                    <span className="text-[#00FF88] text-sm font-bold">★</span>
+                    <span className="text-[#c084fc] text-sm font-bold">★</span>
                   ) : r.id === "shortest" ? (
                     <span className="text-red-400 text-sm">⚠️</span>
                   ) : (
@@ -239,7 +239,7 @@ export default function RouteComparisonPanel() {
                   className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${
                     isSelected
                       ? r.id === "recommended"
-                        ? "border-[#00FF88] bg-[#00FF88] text-black"
+                        ? "border-[#c084fc] bg-[#c084fc] text-black"
                         : r.id === "shortest"
                         ? "border-red-400 bg-red-400 text-white"
                         : "border-amber-400 bg-amber-400 text-black"
@@ -262,7 +262,7 @@ export default function RouteComparisonPanel() {
                 <span
                   className={`text-[11px] font-medium truncate ${
                     r.id === "recommended"
-                      ? "text-emerald-300"
+                      ? "text-purple-300 font-semibold"
                       : r.id === "shortest"
                       ? "text-red-400 font-semibold"
                       : "text-amber-300"
