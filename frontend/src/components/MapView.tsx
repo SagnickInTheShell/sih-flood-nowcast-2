@@ -19,6 +19,7 @@ export default function MapView() {
   const overlayRef = useRef<MapboxOverlay | null>(null);
   const [mapZoom, setMapZoom] = useState(13.8);
   const hasCenteredRef = useRef(false);
+  const justClickedFacilityRef = useRef(false);
 
   const simulateResult = useFloodStore((s) => s.simulateResult);
   const criticalInfra = useFloodStore((s) => s.criticalInfra);
@@ -103,7 +104,45 @@ export default function MapView() {
       attributionControl: false,
     });
 
-    const overlay = new MapboxOverlay({ layers: [] });
+    const overlay = new MapboxOverlay({
+      getCursor: ({ isHovering }) => {
+        if (isHovering) return "pointer";
+        const state = useFloodStore.getState();
+        return (state.isPickingStartOnMap || state.isPickingEndOnMap) ? "crosshair" : "grab";
+      },
+      getTooltip: (info: any) => {
+        if (info && info.object && info.layer?.id === "critical-infra") {
+          const p = info.object.properties;
+          const isHosp = p.infra_type === "hospital";
+          const state = useFloodStore.getState();
+          const actionText = state.isPickingStartOnMap
+            ? "Click to set as Start Point"
+            : state.isPickingEndOnMap
+            ? "Click to set as Destination"
+            : "Click to route here";
+          return {
+            html: `
+              <div style="padding: 6px 10px; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; background: rgba(8, 23, 41, 0.95); color: #fff; border: 1px solid ${isHosp ? '#00e5ff' : '#f59e0b'}; border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.6); pointer-events: none;">
+                <div style="font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 5px;">
+                  <span>${isHosp ? '🏥' : '🚒'}</span>
+                  <span>${p.name}</span>
+                </div>
+                <div style="color: ${isHosp ? '#38bdf8' : '#fbbf24'}; font-size: 10px; font-weight: 600; margin-top: 3px; display: flex; align-items: center; gap: 4px;">
+                  <span>📍</span>
+                  <span>${actionText}</span>
+                </div>
+              </div>
+            `,
+            style: {
+              backgroundColor: "transparent",
+              padding: "0px",
+              boxShadow: "none",
+            },
+          };
+        }
+        return null;
+      },
+    });
     map.addControl(overlay as unknown as maplibregl.IControl);
     mapRef.current = map;
     overlayRef.current = overlay;
@@ -125,9 +164,21 @@ export default function MapView() {
     map.on("zoomend", handleZoomEnd);
 
     map.on("click", (e) => {
+      if (justClickedFacilityRef.current) {
+        return;
+      }
       const state = useFloodStore.getState();
       const clicked = { lat: e.lngLat.lat, lng: e.lngLat.lng };
-      const coordLabel = `Location (${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)})`;
+
+      // Snap to nearby facility if clicked within ~50 meters of a blue/amber dot
+      const nearbyFacility = state.criticalInfra.find(
+        (f) => Math.hypot(f.lat - clicked.lat, f.lng - clicked.lng) < 0.0005
+      );
+
+      const targetCoord = nearbyFacility ? { lat: nearbyFacility.lat, lng: nearbyFacility.lng } : clicked;
+      const coordLabel = nearbyFacility
+        ? nearbyFacility.name
+        : `Location (${clicked.lat.toFixed(4)}, ${clicked.lng.toFixed(4)})`;
 
       if (state.isPickingStartOnMap) {
         // Set new start, recompute to existing end
@@ -137,20 +188,24 @@ export default function MapView() {
           return h ? { lat: h.lat, lng: h.lng } : null;
         })();
         if (endCoord) {
-          state.computeRoute(clicked, endCoord, state.vehicleType, coordLabel);
+          state.computeRoute(targetCoord, endCoord, state.vehicleType, coordLabel);
         } else {
-          state.setRouteStart(clicked, coordLabel);
+          state.setRouteStart(targetCoord, coordLabel);
         }
       } else if (state.isPickingEndOnMap) {
         // Set new end, recompute from existing start
-        state.computeRoute(state.routeStart, clicked, state.vehicleType, undefined, coordLabel);
+        state.computeRoute(state.routeStart, targetCoord, state.vehicleType, undefined, coordLabel);
       } else {
-        // Normal map click: update start, compute to current end
-        const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
-        const infra = state.criticalInfra.find((i) => atRiskIds.has(i.infra_id)) ?? state.criticalInfra[0];
-        if (infra) {
-          const endCoord = state.routeEnd ?? { lat: infra.lat, lng: infra.lng };
-          computeRoute(clicked, endCoord);
+        // Normal map click: if clicked near a facility, set as destination! Otherwise update start
+        if (nearbyFacility) {
+          state.computeRoute(state.routeStart, targetCoord, state.vehicleType, undefined, coordLabel);
+        } else {
+          const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+          const infra = state.criticalInfra.find((i) => atRiskIds.has(i.infra_id)) ?? state.criticalInfra[0];
+          if (infra) {
+            const endCoord = state.routeEnd ?? { lat: infra.lat, lng: infra.lng };
+            computeRoute(clicked, endCoord);
+          }
         }
       }
     });
@@ -249,7 +304,13 @@ export default function MapView() {
             type: "FeatureCollection",
             features: criticalInfra.map((i) => ({
               type: "Feature",
-              properties: { name: i.name, infra_type: i.infra_type },
+              properties: {
+                id: i.infra_id,
+                name: i.name,
+                infra_type: i.infra_type,
+                lat: i.lat,
+                lng: i.lng,
+              },
               geometry: { type: "Point", coordinates: [i.lng, i.lat] },
             })),
           },
@@ -257,11 +318,48 @@ export default function MapView() {
           getFillColor: (f: any) =>
             f.properties.infra_type === "hospital" ? [0, 200, 255, 255] : [245, 158, 11, 255],
           getLineColor: [255, 255, 255, 255],
-          getLineWidth: 2,
+          getLineWidth: 2.5,
           lineWidthMinPixels: 2,
-          getPointRadius: 10,
+          getPointRadius: 13,
           pointRadiusUnits: "pixels",
+          pointRadiusMinPixels: 9,
+          pointRadiusMaxPixels: 24,
           pickable: true,
+          autoHighlight: true,
+          highlightColor: [255, 255, 255, 140],
+          onClick: (info: any) => {
+            if (!info || !info.object) return;
+            justClickedFacilityRef.current = true;
+            setTimeout(() => {
+              justClickedFacilityRef.current = false;
+            }, 200);
+
+            const p = info.object.properties;
+            const facilityLat = p.lat ?? info.object.geometry?.coordinates?.[1];
+            const facilityLng = p.lng ?? info.object.geometry?.coordinates?.[0];
+            const facilityName = p.name || (p.infra_type === "hospital" ? "Hospital" : "Critical Facility");
+            const clickedCoord = { lat: facilityLat, lng: facilityLng };
+
+            const state = useFloodStore.getState();
+
+            if (state.isPickingStartOnMap) {
+              const endCoord = state.routeEnd ?? (() => {
+                const atRisk = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+                const h = state.criticalInfra.find((i) => atRisk.has(i.infra_id)) ?? state.criticalInfra[0];
+                return h ? { lat: h.lat, lng: h.lng } : null;
+              })();
+              if (endCoord) {
+                state.computeRoute(clickedCoord, endCoord, state.vehicleType, facilityName);
+              } else {
+                state.setRouteStart(clickedCoord, facilityName);
+              }
+            } else if (state.isPickingEndOnMap) {
+              state.computeRoute(state.routeStart, clickedCoord, state.vehicleType, undefined, facilityName);
+            } else {
+              // In normal mode: clicking facility routes to it as destination
+              state.computeRoute(state.routeStart, clickedCoord, state.vehicleType, undefined, facilityName);
+            }
+          },
         })
       );
     }
