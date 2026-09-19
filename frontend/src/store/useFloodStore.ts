@@ -148,7 +148,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     });
     try {
       const result = await api.getScenarioDetail(scenarioId);
-      set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
+      set({ simulateResult: result, activeScenarioId: result.scenario_id });
+      // Automatically recalculate route for the new flood scenario
+      const { routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel } = get();
+      if (routeStart && routeEnd) {
+        await get().computeRoute(routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel);
+      }
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
@@ -165,7 +170,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     });
     try {
       const result = await api.simulate(intensity, duration);
-      set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
+      set({ simulateResult: result, activeScenarioId: result.scenario_id });
+      // Automatically recalculate route for the new flood scenario
+      const { routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel } = get();
+      if (routeStart && routeEnd) {
+        await get().computeRoute(routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel);
+      }
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
