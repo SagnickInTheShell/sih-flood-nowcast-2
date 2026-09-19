@@ -16,8 +16,10 @@ function Dashboard() {
   const loadInitial = useFloodStore((s) => s.loadInitial);
   const error = useFloodStore((s) => s.error);
 
-  const [activeSection, setActiveSection] = useState<NavSection>("dashboard");
+  const [activeSection, setActiveSection] = useState<NavSection>("routing");
   const [rightTab, setRightTab] = useState<"routing" | "scenario" | "ml_intel">("routing");
+  const [kpiCollapsed, setKpiCollapsed] = useState(false);
+  const [analyticsCollapsed, setAnalyticsCollapsed] = useState(false);
 
   useEffect(() => {
     loadInitial();
@@ -25,15 +27,10 @@ function Dashboard() {
 
   function handleNavSelect(section: NavSection) {
     setActiveSection(section);
-    if (section === "scenarios") {
-      setRightTab("scenario");
-    } else if (section === "routing") {
-      setRightTab("routing");
-    } else if (section === "analytics" || section === "infrastructure") {
-      setRightTab("ml_intel");
-    } else {
-      setRightTab("routing");
-    }
+    // Section IDs map directly to right-panel tabs
+    if (section === "scenarios") setRightTab("scenario");
+    else if (section === "ml_intel") setRightTab("ml_intel");
+    else setRightTab("routing");
   }
 
   return (
@@ -41,73 +38,40 @@ function Dashboard() {
       {/* 1. Top Header */}
       <Header />
 
-      {/* 2. Top KPI Stat Tiles Row (4 reference tiles) */}
-      <KpiStatsRow />
+      {/* 2. Top KPI Stat Tiles Row — collapsible */}
+      <KpiStatsRow isCollapsed={kpiCollapsed} onToggle={() => setKpiCollapsed((v) => !v)} />
 
       {/* Error alert toast */}
       {error && (
         <div className="bg-red-950/90 border-y border-red-500/50 text-red-200 text-xs px-5 py-2 flex items-center justify-between">
           <span>Notice: {error}</span>
-          <button
-            onClick={() => useFloodStore.setState({ error: null })}
-            className="text-red-400 hover:text-white"
-          >
+          <button onClick={() => useFloodStore.setState({ error: null })} className="text-red-400 hover:text-white">
             &times;
           </button>
         </div>
       )}
 
-      {/* 3. Main Workspace: Left Sidebar Nav + Central Map Area + Right Panel */}
+      {/* 3. Main Workspace */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left Sidebar Navigation */}
         <SidebarNav activeSection={activeSection} onSelectSection={handleNavSelect} />
 
         {/* Central Map & Bottom Analytics */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-          {/* Central Map (with top pill bar, layer checklist, callouts, compass) */}
-          <div className="relative flex-1 min-h-[360px] bg-[#061120] overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Map fills remaining space */}
+          <div className="relative flex-1 min-h-0 bg-[#061120] overflow-hidden">
             <MapView />
           </div>
 
-          {/* 4. Bottom Row (4 Cards matching reference) */}
-          <BottomAnalyticsRow />
-
-          {/* 5. Dashboard Footer Bar */}
-          <footer className="bg-[#050e1a] px-5 py-2 border-t border-[#11263d] flex items-center justify-between text-xs text-slate-400 flex-wrap gap-3">
-            <div className="flex items-center gap-2.5">
-              <svg className="w-4 h-4 text-[#00E5FF]" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" />
-              </svg>
-              <span className="font-bold text-white tracking-wider">NIMBUS</span>
-              <span className="text-slate-600">|</span>
-              <span className="text-slate-300 text-[11px]">
-                Urban Flood Nowcasting and Rerouting System
-              </span>
-            </div>
-
-            <div className="flex items-center gap-5 text-[11px] text-slate-300 flex-wrap">
-              <div className="flex items-center gap-1.5">
-                <span>📊</span>
-                <span>Data-Driven Decisions</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span>🛡️</span>
-                <span>Resilient Communities</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span>⚡</span>
-                <span>Faster Emergency Response</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                <span>🌱</span>
-                <span>For a Safer Tomorrow</span>
-              </div>
-            </div>
-          </footer>
+          {/* Bottom Analytics Row — collapsible */}
+          <BottomAnalyticsRow
+            isCollapsed={analyticsCollapsed}
+            onToggle={() => setAnalyticsCollapsed((v) => !v)}
+          />
         </div>
 
-        {/* 6. Right Panel: Emergency Routing & Scenario Simulator */}
-        <aside className="w-80 xl:w-92 flex-shrink-0 bg-[#071326] border-l border-[#11263d] flex flex-col overflow-hidden">
+        {/* Right Panel: Emergency Routing & Scenario Simulator */}
+        <aside className="w-80 xl:w-88 flex-shrink-0 bg-[#071326] border-l border-[#11263d] flex flex-col overflow-hidden">
           {/* Tab Switcher */}
           <div className="flex border-b border-[#11263d] bg-[#09182b] p-1.5 gap-1">
             <button

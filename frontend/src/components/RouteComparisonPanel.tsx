@@ -136,7 +136,6 @@ export default function RouteComparisonPanel() {
   const isPickingEndOnMap = useFloodStore((s) => s.isPickingEndOnMap);
   const setIsPickingEndOnMap = useFloodStore((s) => s.setIsPickingEndOnMap);
 
-  const [isNavigating, setIsNavigating] = useState(false);
 
   const atRiskIds = new Set(simulateResult?.at_risk_infra_ids ?? []);
   const defaultHospital =
@@ -161,10 +160,6 @@ export default function RouteComparisonPanel() {
     computeRoute(routeStart, resolvedEnd, v);
   };
 
-  const handleStartNavigation = () => {
-    setIsNavigating(true);
-    computeRoute(routeStart, resolvedEnd, vehicleType);
-  };
 
   const handleSwap = () => {
     // Swap start ↔ end (labels and coords)
@@ -384,17 +379,6 @@ export default function RouteComparisonPanel() {
         })}
       </div>
 
-      {/* Start Navigation */}
-      <button
-        onClick={handleStartNavigation}
-        disabled={loading}
-        className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#0091ea] to-[#00b0ff] hover:from-[#00b0ff] hover:to-[#40c4ff] text-white font-bold text-sm flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(0,145,234,0.45)] hover:shadow-[0_0_20px_rgba(0,176,255,0.65)] transition-all cursor-pointer disabled:opacity-50"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-        </svg>
-        <span>{isNavigating ? "Active Navigation En Route" : "Start Navigation"}</span>
-      </button>
 
       {/* Footer */}
       <div className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5 pt-0.5">

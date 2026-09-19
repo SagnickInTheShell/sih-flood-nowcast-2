@@ -5,6 +5,10 @@ import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import { useFloodStore, VehicleType } from "../store/useFloodStore";
 import { stateColor } from "../theme";
+import RouteComparisonPanel from "./RouteComparisonPanel";
+import ScenarioSlider from "./ScenarioSlider";
+import UncertaintyPanel from "./UncertaintyPanel";
+import ExplainabilityPanel from "./ExplainabilityPanel";
 
 const ANCHOR = { lat: 12.9280, lng: 77.6700 }; // Bellandur center
 const BASEMAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -23,8 +27,6 @@ export default function MapView() {
   const vehicleType = useFloodStore((s) => s.vehicleType);
   const layerVisibility = useFloodStore((s) => s.layerVisibility);
   const toggleLayer = useFloodStore((s) => s.toggleLayer);
-  const activeMapPill = useFloodStore((s) => s.activeMapPill);
-  const setActiveMapPill = useFloodStore((s) => s.setActiveMapPill);
   const searchQuery = useFloodStore((s) => s.searchQuery);
   const setSearchQuery = useFloodStore((s) => s.setSearchQuery);
   const computeRoute = useFloodStore((s) => s.computeRoute);
@@ -42,6 +44,22 @@ export default function MapView() {
   const isPicking = isPickingStartOnMap || isPickingEndOnMap;
 
   const [layersOpen, setLayersOpen] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fsTab, setFsTab] = useState<"routing" | "scenarios" | "ml_intel">("routing");
+  const [fsPanelOpen, setFsPanelOpen] = useState(false);
+
+  // Tab definitions — same as left sidebar
+  const fsTabs: { id: "routing" | "scenarios" | "ml_intel"; label: string; icon: string }[] = [
+    { id: "routing",   label: "Emergency Routing",   icon: "🧭" },
+    { id: "scenarios", label: "Scenario Simulator",  icon: "⚙️" },
+    { id: "ml_intel",  label: "ML Intelligence",     icon: "🔬" },
+  ];
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
 
   // Memoize heavy GeoJSON feature collections to avoid allocating thousands of JS objects on render
   const roadData = useMemo(() => {
@@ -74,16 +92,6 @@ export default function MapView() {
     };
   }, [simulateResult]);
 
-  // Map Filter Pills
-  const mapPills = [
-    "Live Map",
-    "Rainfall",
-    "Flood Risk",
-    "Road Status",
-    "Drainage Network",
-    "Facilities",
-    "Forecast (0-3h)",
-  ];
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -457,63 +465,111 @@ export default function MapView() {
         </div>
       )}
 
-      {/* 1. Top Pill Navigation & Search Bar */}
-      <div className="absolute top-3 inset-x-4 z-20 flex items-center justify-between gap-3 pointer-events-none">
-        {/* Pills */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg pointer-events-auto overflow-x-auto">
-          {mapPills.map((pill) => {
-            const isActive = activeMapPill === pill;
-            return (
-              <button
-                key={pill}
-                onClick={() => setActiveMapPill(pill)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                  isActive
-                    ? "bg-[#0091ea] text-white shadow-[0_0_10px_rgba(0,145,234,0.5)] border border-[#40c4ff]"
-                    : "text-slate-300 hover:text-white hover:bg-[#0c233d]"
-                }`}
-              >
-                {pill}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Search Input & Fullscreen */}
-        <div className="flex items-center gap-2 pointer-events-auto">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg text-xs text-slate-300 w-64">
-            <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              type="text"
-              placeholder="Search location, hospital, or area..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent focus:outline-none w-full text-slate-100 placeholder-slate-500 text-xs"
-            />
+      {/* ── Fullscreen Top Nav: same 3 tabs as left sidebar ── */}
+      {isFullscreen && (
+        <div className="absolute top-3 inset-x-4 z-20 flex items-center justify-between gap-3 pointer-events-none">
+          {/* Tab pills */}
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg pointer-events-auto">
+            {fsTabs.map((tab) => {
+              const isActive = fsPanelOpen && fsTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    if (fsPanelOpen && fsTab === tab.id) {
+                      setFsPanelOpen(false);
+                    } else {
+                      setFsTab(tab.id);
+                      setFsPanelOpen(true);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                    isActive
+                      ? "bg-[#0091ea] text-white shadow-[0_0_10px_rgba(0,145,234,0.5)] border border-[#40c4ff]"
+                      : "text-slate-300 hover:text-white hover:bg-[#0c233d]"
+                  }`}
+                >
+                  <span>{tab.icon}</span>
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          <button
-            onClick={() => {
-              if (document.fullscreenElement) {
-                document.exitFullscreen();
-              } else {
-                containerRef.current?.parentElement?.requestFullscreen();
-              }
-            }}
-            title="Toggle Fullscreen"
-            className="w-8 h-8 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] text-slate-300 hover:text-white flex items-center justify-center transition-all shadow-lg"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
-          </button>
+          {/* Search + close panel + exit fullscreen */}
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg text-xs text-slate-300 w-56">
+              <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search location or area..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-transparent focus:outline-none w-full text-slate-100 placeholder-slate-500 text-xs"
+              />
+            </div>
+            <button
+              onClick={() => document.exitFullscreen()}
+              title="Exit Fullscreen"
+              className="w-8 h-8 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] text-slate-300 hover:text-white flex items-center justify-center transition-all shadow-lg"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4m0 0H4m5 0L3 10m12-1V4m0 0h5m-5 0l6 6M9 20v-5m0 0H4m5 0l-6 6m12-1v5m0 0h5m-5 0l6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* 2. Floating Map Layers & Legend Panel (Top Left) */}
-      <div className="absolute top-16 left-4 z-20 w-48 rounded-xl bg-[#071526]/95 backdrop-blur-md border border-[#142e4c] p-3 shadow-xl select-none">
+      {/* ── Fullscreen slide-in right panel ── */}
+      {isFullscreen && fsPanelOpen && (
+        <div className="absolute top-14 right-0 bottom-0 w-80 z-30 flex flex-col bg-[#071326]/98 backdrop-blur-md border-l border-[#11263d] shadow-2xl">
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#11263d] bg-[#09182b]">
+            <span className="text-xs font-bold text-slate-100">
+              {fsTabs.find((t) => t.id === fsTab)?.icon}{" "}
+              {fsTabs.find((t) => t.id === fsTab)?.label}
+            </span>
+            <button
+              onClick={() => setFsPanelOpen(false)}
+              className="text-slate-400 hover:text-white text-lg leading-none"
+            >
+              ✕
+            </button>
+          </div>
+          {/* Panel content */}
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5">
+            {fsTab === "routing" ? (
+              <RouteComparisonPanel />
+            ) : fsTab === "scenarios" ? (
+              <ScenarioSlider />
+            ) : (
+              <div className="space-y-3">
+                <UncertaintyPanel />
+                <ExplainabilityPanel />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen button (visible only in normal view, top-right) */}
+      {!isFullscreen && (
+        <button
+          onClick={() => containerRef.current?.parentElement?.requestFullscreen()}
+          title="Enter Fullscreen"
+          className="absolute top-3 right-4 z-20 w-8 h-8 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] text-slate-300 hover:text-[#00e5ff] hover:border-[#00e5ff]/50 flex items-center justify-center transition-all shadow-lg"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+        </button>
+      )}
+
+      {/* Layers & Legend Panel */}
+      <div className={`absolute ${isFullscreen ? "top-16" : "top-3"} left-4 z-20 w-48 rounded-xl bg-[#071526]/95 backdrop-blur-md border border-[#142e4c] p-3 shadow-xl select-none`}>
         <div className="flex items-center justify-between pb-1.5 border-b border-[#142e4c]">
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
             Map Layers
