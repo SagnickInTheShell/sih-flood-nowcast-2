@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { HeatmapLayer } from "@deck.gl/aggregation-layers";
-import { GeoJsonLayer, PathLayer } from "@deck.gl/layers";
+import { GeoJsonLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import { useFloodStore, VehicleType } from "../store/useFloodStore";
@@ -28,6 +28,18 @@ export default function MapView() {
   const searchQuery = useFloodStore((s) => s.searchQuery);
   const setSearchQuery = useFloodStore((s) => s.setSearchQuery);
   const computeRoute = useFloodStore((s) => s.computeRoute);
+  const routeStart = useFloodStore((s) => s.routeStart);
+  const routeStartLabel = useFloodStore((s) => s.routeStartLabel);
+  const isPickingStartOnMap = useFloodStore((s) => s.isPickingStartOnMap);
+  const setRouteStart = useFloodStore((s) => s.setRouteStart);
+  const setIsPickingStartOnMap = useFloodStore((s) => s.setIsPickingStartOnMap);
+  const routeEnd = useFloodStore((s) => s.routeEnd);
+  const routeEndLabel = useFloodStore((s) => s.routeEndLabel);
+  const isPickingEndOnMap = useFloodStore((s) => s.isPickingEndOnMap);
+  const setRouteEnd = useFloodStore((s) => s.setRouteEnd);
+  const setIsPickingEndOnMap = useFloodStore((s) => s.setIsPickingEndOnMap);
+
+  const isPicking = isPickingStartOnMap || isPickingEndOnMap;
 
   const [layersOpen, setLayersOpen] = useState(true);
 
@@ -106,10 +118,32 @@ export default function MapView() {
 
     map.on("click", (e) => {
       const state = useFloodStore.getState();
-      const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
-      const infra = state.criticalInfra.find((i) => atRiskIds.has(i.infra_id)) ?? state.criticalInfra[0];
-      if (infra) {
-        computeRoute({ lat: e.lngLat.lat, lng: e.lngLat.lng }, { lat: infra.lat, lng: infra.lng });
+      const clicked = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+      const coordLabel = `Location (${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)})`;
+
+      if (state.isPickingStartOnMap) {
+        // Set new start, recompute to existing end
+        const endCoord = state.routeEnd ?? (() => {
+          const atRisk = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+          const h = state.criticalInfra.find((i) => atRisk.has(i.infra_id)) ?? state.criticalInfra[0];
+          return h ? { lat: h.lat, lng: h.lng } : null;
+        })();
+        if (endCoord) {
+          state.computeRoute(clicked, endCoord, state.vehicleType, coordLabel);
+        } else {
+          state.setRouteStart(clicked, coordLabel);
+        }
+      } else if (state.isPickingEndOnMap) {
+        // Set new end, recompute from existing start
+        state.computeRoute(state.routeStart, clicked, state.vehicleType, undefined, coordLabel);
+      } else {
+        // Normal map click: update start, compute to current end
+        const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+        const infra = state.criticalInfra.find((i) => atRiskIds.has(i.infra_id)) ?? state.criticalInfra[0];
+        if (infra) {
+          const endCoord = state.routeEnd ?? { lat: infra.lat, lng: infra.lng };
+          computeRoute(clicked, endCoord);
+        }
       }
     });
 
@@ -315,13 +349,113 @@ export default function MapView() {
       }
     }
 
+    // 6. Start Point Pin (cyan dot with white ring + outer pulse ring)
+    layers.push(
+      new ScatterplotLayer({
+        id: "route-start-pin-outer",
+        data: [{ position: [routeStart.lng, routeStart.lat] }],
+        getPosition: (d: any) => d.position,
+        getFillColor: [0, 229, 255, 40],
+        getLineColor: [0, 229, 255, 160],
+        getRadius: 18,
+        radiusUnits: "pixels",
+        lineWidthMinPixels: 1.5,
+        stroked: true,
+        filled: true,
+        pickable: false,
+      })
+    );
+    layers.push(
+      new ScatterplotLayer({
+        id: "route-start-pin",
+        data: [{ position: [routeStart.lng, routeStart.lat] }],
+        getPosition: (d: any) => d.position,
+        getFillColor: [0, 229, 255, 255],
+        getLineColor: [255, 255, 255, 240],
+        getRadius: 10,
+        radiusUnits: "pixels",
+        lineWidthMinPixels: 2.5,
+        stroked: true,
+        filled: true,
+        pickable: false,
+      })
+    );
+
+    // 7. End Point Pin (emerald green dot with white ring)
+    const endCoord = routeEnd ?? (() => {
+      const infra = criticalInfra[0];
+      return infra ? { lat: infra.lat, lng: infra.lng } : null;
+    })();
+    if (endCoord) {
+      layers.push(
+        new ScatterplotLayer({
+          id: "route-end-pin-outer",
+          data: [{ position: [endCoord.lng, endCoord.lat] }],
+          getPosition: (d: any) => d.position,
+          getFillColor: [52, 211, 153, 40],
+          getLineColor: [52, 211, 153, 160],
+          getRadius: 18,
+          radiusUnits: "pixels",
+          lineWidthMinPixels: 1.5,
+          stroked: true,
+          filled: true,
+          pickable: false,
+        })
+      );
+      layers.push(
+        new ScatterplotLayer({
+          id: "route-end-pin",
+          data: [{ position: [endCoord.lng, endCoord.lat] }],
+          getPosition: (d: any) => d.position,
+          getFillColor: [52, 211, 153, 255],
+          getLineColor: [255, 255, 255, 240],
+          getRadius: 10,
+          radiusUnits: "pixels",
+          lineWidthMinPixels: 2.5,
+          stroked: true,
+          filled: true,
+          pickable: false,
+        })
+      );
+    }
+
     overlayRef.current.setProps({ layers });
-  }, [simulateResult, criticalInfra, route, selectedRouteId, layerVisibility, mapZoom]);
+  }, [simulateResult, criticalInfra, route, selectedRouteId, layerVisibility, mapZoom, routeStart, routeEnd]);
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#061120]">
       {/* MapLibre Canvas */}
-      <div ref={containerRef} className="absolute inset-0 z-0" />
+      <div
+        ref={containerRef}
+        className="absolute inset-0 z-0"
+        style={{ cursor: isPicking ? "crosshair" : undefined }}
+      />
+
+      {/* Picking banner — shown for either start or end picking mode */}
+      {isPicking && (
+        <div className="absolute top-16 inset-x-0 flex justify-center z-30 pointer-events-none">
+          <div className={`flex items-center gap-2.5 px-4 py-2.5 rounded-2xl backdrop-blur-md font-bold text-xs pointer-events-auto border shadow-lg ${
+            isPickingStartOnMap
+              ? "bg-[#00e5ff]/15 border-[#00e5ff]/60 text-[#00e5ff] shadow-[0_0_20px_rgba(0,229,255,0.3)]"
+              : "bg-emerald-400/15 border-emerald-400/60 text-emerald-300 shadow-[0_0_20px_rgba(52,211,153,0.3)]"
+          }`}>
+            <svg className="w-4 h-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="10" r="3" strokeWidth={2} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 2C8.134 2 5 5.134 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.866-3.134-7-7-7z" />
+            </svg>
+            {isPickingStartOnMap
+              ? "Click anywhere to set your START point 🔵"
+              : "Click anywhere to set your DESTINATION 🟢"}
+            <button
+              onClick={() => { setIsPickingStartOnMap(false); setIsPickingEndOnMap(false); }}
+              className="ml-1 opacity-70 hover:opacity-100 transition-opacity text-sm leading-none"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 1. Top Pill Navigation & Search Bar */}
       <div className="absolute top-3 inset-x-4 z-20 flex items-center justify-between gap-3 pointer-events-none">
@@ -512,6 +646,14 @@ export default function MapView() {
                 <div className="flex items-center gap-2">
                   <span className="w-3.5 h-1 rounded-xs bg-[#c084fc] shadow-[0_0_6px_rgba(192,132,252,0.8)]" />
                   <span className="text-slate-300">Selected Route</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#00e5ff] border-2 border-white" />
+                  <span className="text-slate-300">Start Point</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-white" />
+                  <span className="text-slate-300">End / Destination</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-red-400 text-xs">⚠️</span>
