@@ -1,10 +1,14 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { HeatmapLayer } from "@deck.gl/aggregation-layers";
-import { GeoJsonLayer, PathLayer } from "@deck.gl/layers";
+import { GeoJsonLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import maplibregl from "maplibre-gl";
 import { useFloodStore, VehicleType } from "../store/useFloodStore";
 import { stateColor } from "../theme";
+import RouteComparisonPanel from "./RouteComparisonPanel";
+import ScenarioSlider from "./ScenarioSlider";
+import UncertaintyPanel from "./UncertaintyPanel";
+import ExplainabilityPanel from "./ExplainabilityPanel";
 
 const ANCHOR = { lat: 12.9280, lng: 77.6700 }; // Bellandur center
 const BASEMAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -13,7 +17,9 @@ export default function MapView() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
+  const [mapZoom, setMapZoom] = useState(13.8);
   const hasCenteredRef = useRef(false);
+  const justClickedFacilityRef = useRef(false);
 
   const simulateResult = useFloodStore((s) => s.simulateResult);
   const criticalInfra = useFloodStore((s) => s.criticalInfra);
@@ -22,24 +28,71 @@ export default function MapView() {
   const vehicleType = useFloodStore((s) => s.vehicleType);
   const layerVisibility = useFloodStore((s) => s.layerVisibility);
   const toggleLayer = useFloodStore((s) => s.toggleLayer);
-  const activeMapPill = useFloodStore((s) => s.activeMapPill);
-  const setActiveMapPill = useFloodStore((s) => s.setActiveMapPill);
   const searchQuery = useFloodStore((s) => s.searchQuery);
   const setSearchQuery = useFloodStore((s) => s.setSearchQuery);
   const computeRoute = useFloodStore((s) => s.computeRoute);
+  const routeStart = useFloodStore((s) => s.routeStart);
+  const routeStartLabel = useFloodStore((s) => s.routeStartLabel);
+  const isPickingStartOnMap = useFloodStore((s) => s.isPickingStartOnMap);
+  const setRouteStart = useFloodStore((s) => s.setRouteStart);
+  const setIsPickingStartOnMap = useFloodStore((s) => s.setIsPickingStartOnMap);
+  const routeEnd = useFloodStore((s) => s.routeEnd);
+  const routeEndLabel = useFloodStore((s) => s.routeEndLabel);
+  const isPickingEndOnMap = useFloodStore((s) => s.isPickingEndOnMap);
+  const setRouteEnd = useFloodStore((s) => s.setRouteEnd);
+  const setIsPickingEndOnMap = useFloodStore((s) => s.setIsPickingEndOnMap);
+
+  const isPicking = isPickingStartOnMap || isPickingEndOnMap;
 
   const [layersOpen, setLayersOpen] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fsTab, setFsTab] = useState<"routing" | "scenarios" | "ml_intel">("routing");
+  const [fsPanelOpen, setFsPanelOpen] = useState(false);
 
-  // Map Filter Pills
-  const mapPills = [
-    "Live Map",
-    "Rainfall",
-    "Flood Risk",
-    "Road Status",
-    "Drainage Network",
-    "Facilities",
-    "Forecast (0-3h)",
+  // Tab definitions — same as left sidebar
+  const fsTabs: { id: "routing" | "scenarios" | "ml_intel"; label: string; icon: string }[] = [
+    { id: "routing",   label: "Emergency Routing",   icon: "🧭" },
+    { id: "scenarios", label: "Scenario Simulator",  icon: "⚙️" },
+    { id: "ml_intel",  label: "ML Intelligence",     icon: "🔬" },
   ];
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  // Memoize heavy GeoJSON feature collections to avoid allocating thousands of JS objects on render
+  const roadData = useMemo(() => {
+    if (!simulateResult?.road_segments) return null;
+    return {
+      type: "FeatureCollection" as const,
+      features: simulateResult.road_segments.map((seg) => ({
+        type: "Feature" as const,
+        properties: { edge_id: seg.edge_id, state: seg.state },
+        geometry: seg.geometry,
+      })),
+    };
+  }, [simulateResult]);
+
+  const drainageData = useMemo(() => {
+    if (!simulateResult?.node_predictions) return null;
+    return {
+      type: "FeatureCollection" as const,
+      features: simulateResult.node_predictions.slice(0, 120).map((n, idx) => ({
+        type: "Feature" as const,
+        properties: {},
+        geometry: {
+          type: "LineString" as const,
+          coordinates: [
+            [n.lng, n.lat],
+            [n.lng + (idx % 2 === 0 ? 0.003 : -0.003), n.lat - 0.002],
+          ] as [number, number][],
+        },
+      })),
+    };
+  }, [simulateResult]);
+
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -51,21 +104,115 @@ export default function MapView() {
       attributionControl: false,
     });
 
-    const overlay = new MapboxOverlay({ layers: [] });
+    const overlay = new MapboxOverlay({
+      getCursor: ({ isHovering }) => {
+        if (isHovering) return "pointer";
+        const state = useFloodStore.getState();
+        return (state.isPickingStartOnMap || state.isPickingEndOnMap) ? "crosshair" : "grab";
+      },
+      getTooltip: (info: any) => {
+        if (info && info.object && info.layer?.id === "critical-infra") {
+          const p = info.object.properties;
+          const isHosp = p.infra_type === "hospital";
+          const state = useFloodStore.getState();
+          const actionText = state.isPickingStartOnMap
+            ? "Click to set as Start Point"
+            : state.isPickingEndOnMap
+            ? "Click to set as Destination"
+            : "Click to route here";
+          return {
+            html: `
+              <div style="padding: 6px 10px; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; background: rgba(8, 23, 41, 0.95); color: #fff; border: 1px solid ${isHosp ? '#00e5ff' : '#f59e0b'}; border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.6); pointer-events: none;">
+                <div style="font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 5px;">
+                  <span>${isHosp ? '🏥' : '🚒'}</span>
+                  <span>${p.name}</span>
+                </div>
+                <div style="color: ${isHosp ? '#38bdf8' : '#fbbf24'}; font-size: 10px; font-weight: 600; margin-top: 3px; display: flex; align-items: center; gap: 4px;">
+                  <span>📍</span>
+                  <span>${actionText}</span>
+                </div>
+              </div>
+            `,
+            style: {
+              backgroundColor: "transparent",
+              padding: "0px",
+              boxShadow: "none",
+            },
+          };
+        }
+        return null;
+      },
+    });
     map.addControl(overlay as unknown as maplibregl.IControl);
     mapRef.current = map;
     overlayRef.current = overlay;
 
+    let zoomTimeout: ReturnType<typeof setTimeout> | null = null;
+    const handleZoomEnd = () => {
+      if (zoomTimeout) clearTimeout(zoomTimeout);
+      zoomTimeout = setTimeout(() => {
+        if (!mapRef.current) return;
+        const currentZ = mapRef.current.getZoom();
+        setMapZoom((prevZ) => {
+          if (Math.abs(currentZ - prevZ) >= 0.25) {
+            return currentZ;
+          }
+          return prevZ;
+        });
+      }, 120);
+    };
+    map.on("zoomend", handleZoomEnd);
+
     map.on("click", (e) => {
+      if (justClickedFacilityRef.current) {
+        return;
+      }
       const state = useFloodStore.getState();
-      const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
-      const infra = state.criticalInfra.find((i) => atRiskIds.has(i.infra_id)) ?? state.criticalInfra[0];
-      if (infra) {
-        computeRoute({ lat: e.lngLat.lat, lng: e.lngLat.lng }, { lat: infra.lat, lng: infra.lng });
+      const clicked = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+
+      // Snap to nearby facility if clicked within ~50 meters of a blue/amber dot
+      const nearbyFacility = state.criticalInfra.find(
+        (f) => Math.hypot(f.lat - clicked.lat, f.lng - clicked.lng) < 0.0005
+      );
+
+      const targetCoord = nearbyFacility ? { lat: nearbyFacility.lat, lng: nearbyFacility.lng } : clicked;
+      const coordLabel = nearbyFacility
+        ? nearbyFacility.name
+        : `Location (${clicked.lat.toFixed(4)}, ${clicked.lng.toFixed(4)})`;
+
+      if (state.isPickingStartOnMap) {
+        // Set new start, recompute to existing end
+        const endCoord = state.routeEnd ?? (() => {
+          const atRisk = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+          const h = state.criticalInfra.find((i) => atRisk.has(i.infra_id)) ?? state.criticalInfra[0];
+          return h ? { lat: h.lat, lng: h.lng } : null;
+        })();
+        if (endCoord) {
+          state.computeRoute(targetCoord, endCoord, state.vehicleType, coordLabel);
+        } else {
+          state.setRouteStart(targetCoord, coordLabel);
+        }
+      } else if (state.isPickingEndOnMap) {
+        // Set new end, recompute from existing start
+        state.computeRoute(state.routeStart, targetCoord, state.vehicleType, undefined, coordLabel);
+      } else {
+        // Normal map click: if clicked near a facility, set as destination! Otherwise update start
+        if (nearbyFacility) {
+          state.computeRoute(state.routeStart, targetCoord, state.vehicleType, undefined, coordLabel);
+        } else {
+          const atRiskIds = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+          const infra = state.criticalInfra.find((i) => atRiskIds.has(i.infra_id)) ?? state.criticalInfra[0];
+          if (infra) {
+            const endCoord = state.routeEnd ?? { lat: infra.lat, lng: infra.lng };
+            computeRoute(clicked, endCoord);
+          }
+        }
       }
     });
 
     return () => {
+      if (zoomTimeout) clearTimeout(zoomTimeout);
+      map.off("zoomend", handleZoomEnd);
       map.remove();
       mapRef.current = null;
     };
@@ -87,18 +234,11 @@ export default function MapView() {
     const layers: any[] = [];
 
     // 1. Road Network Layer
-    if (simulateResult && layerVisibility.roads) {
+    if (roadData && layerVisibility.roads) {
       layers.push(
         new GeoJsonLayer({
           id: "road-segments",
-          data: {
-            type: "FeatureCollection",
-            features: simulateResult.road_segments.map((seg) => ({
-              type: "Feature",
-              properties: { edge_id: seg.edge_id, state: seg.state },
-              geometry: seg.geometry,
-            })),
-          },
+          data: roadData,
           getLineColor: (f: any) => [...(stateColor[f.properties.state] ?? stateColor.clear), 255],
           getLineWidth: (f: any) => (f.properties.state === "flooded" ? 7 : 4),
           widthUnits: "pixels",
@@ -110,48 +250,44 @@ export default function MapView() {
       );
     }
 
-    // 2. Flood Heatmap Layer
+    // 2. Flood Heatmap Layer - Dynamic radius locked to physical ground scale (~280m)
     if (simulateResult && layerVisibility.floodDepth) {
+      // MapLibre meters per pixel at latitude ~12.93°: 152575 / 2^zoom
+      // Fixed ground radius of ~280 meters ensures the flood pool stays fixed on the ground when zooming
+      const groundRadiusMeters = 280;
+      const dynamicRadiusPixels = Math.max(
+        8,
+        Math.min(320, Math.round((groundRadiusMeters * Math.pow(2, mapZoom)) / 152575))
+      );
+
       layers.push(
         new HeatmapLayer({
           id: "flood-depth-heatmap",
           data: simulateResult.node_predictions,
           getPosition: (d: any) => [d.lng, d.lat],
           getWeight: (d: any) => Math.max(d.depth_m_mean, 0.05),
-          radiusPixels: 65,
-          intensity: 1.4,
-          threshold: 0.02,
-          aggregation: "SUM",
+          radiusPixels: dynamicRadiusPixels,
+          intensity: 1.2,
+          threshold: 0.03,
+          aggregation: "MEAN",
+          weightsTextureSize: 512,
           colorRange: [
             [0, 150, 255, 0],
-            [0, 229, 255, 80],
-            [255, 230, 0, 140],
-            [255, 120, 0, 190],
-            [255, 20, 20, 230],
+            [0, 229, 255, 100],
+            [255, 230, 0, 160],
+            [255, 120, 0, 200],
+            [255, 20, 20, 240],
           ],
         })
       );
     }
 
     // 3. Drainage Network
-    if (simulateResult && layerVisibility.drainage) {
+    if (drainageData && layerVisibility.drainage) {
       layers.push(
         new GeoJsonLayer({
           id: "drainage-lines",
-          data: {
-            type: "FeatureCollection",
-            features: simulateResult.node_predictions.slice(0, 120).map((n, idx) => ({
-              type: "Feature",
-              properties: {},
-              geometry: {
-                type: "LineString",
-                coordinates: [
-                  [n.lng, n.lat],
-                  [n.lng + (idx % 2 === 0 ? 0.003 : -0.003), n.lat - 0.002],
-                ],
-              },
-            })),
-          },
+          data: drainageData,
           getLineColor: [0, 229, 255, 170], // Neon cyan drainage
           getLineWidth: 2,
           widthUnits: "pixels",
@@ -168,7 +304,13 @@ export default function MapView() {
             type: "FeatureCollection",
             features: criticalInfra.map((i) => ({
               type: "Feature",
-              properties: { name: i.name, infra_type: i.infra_type },
+              properties: {
+                id: i.infra_id,
+                name: i.name,
+                infra_type: i.infra_type,
+                lat: i.lat,
+                lng: i.lng,
+              },
               geometry: { type: "Point", coordinates: [i.lng, i.lat] },
             })),
           },
@@ -176,116 +318,356 @@ export default function MapView() {
           getFillColor: (f: any) =>
             f.properties.infra_type === "hospital" ? [0, 200, 255, 255] : [245, 158, 11, 255],
           getLineColor: [255, 255, 255, 255],
-          getLineWidth: 2,
+          getLineWidth: 2.5,
           lineWidthMinPixels: 2,
-          getPointRadius: 10,
+          getPointRadius: 13,
           pointRadiusUnits: "pixels",
+          pointRadiusMinPixels: 9,
+          pointRadiusMaxPixels: 24,
           pickable: true,
+          autoHighlight: true,
+          highlightColor: [255, 255, 255, 140],
+          onClick: (info: any) => {
+            if (!info || !info.object) return;
+            justClickedFacilityRef.current = true;
+            setTimeout(() => {
+              justClickedFacilityRef.current = false;
+            }, 200);
+
+            const p = info.object.properties;
+            const facilityLat = p.lat ?? info.object.geometry?.coordinates?.[1];
+            const facilityLng = p.lng ?? info.object.geometry?.coordinates?.[0];
+            const facilityName = p.name || (p.infra_type === "hospital" ? "Hospital" : "Critical Facility");
+            const clickedCoord = { lat: facilityLat, lng: facilityLng };
+
+            const state = useFloodStore.getState();
+
+            if (state.isPickingStartOnMap) {
+              const endCoord = state.routeEnd ?? (() => {
+                const atRisk = new Set(state.simulateResult?.at_risk_infra_ids ?? []);
+                const h = state.criticalInfra.find((i) => atRisk.has(i.infra_id)) ?? state.criticalInfra[0];
+                return h ? { lat: h.lat, lng: h.lng } : null;
+              })();
+              if (endCoord) {
+                state.computeRoute(clickedCoord, endCoord, state.vehicleType, facilityName);
+              } else {
+                state.setRouteStart(clickedCoord, facilityName);
+              }
+            } else if (state.isPickingEndOnMap) {
+              state.computeRoute(state.routeStart, clickedCoord, state.vehicleType, undefined, facilityName);
+            } else {
+              // In normal mode: clicking facility routes to it as destination
+              state.computeRoute(state.routeStart, clickedCoord, state.vehicleType, undefined, facilityName);
+            }
+          },
         })
       );
     }
 
-    // 5. Emergency Routes (Active, Baseline & Alternate)
+    // 5. Emergency Routes (Active & Alternatives)
     if (route && layerVisibility.route) {
-      // Baseline / Shortest in red or muted slate
-      if (route.baseline_route_geometry?.coordinates?.length) {
-        layers.push(
-          new PathLayer({
-            id: "baseline-route-path",
-            data: [{ path: route.baseline_route_geometry.coordinates }],
-            getPath: (d: any) => d.path,
-            getColor: selectedRouteId === "shortest" ? [239, 68, 68, 255] : [100, 116, 139, 140],
-            getWidth: selectedRouteId === "shortest" ? 7 : 4,
-            widthMinPixels: 4,
-            capRounded: true,
-          })
-        );
+      // Build a unified list of available routes
+      const allRoutes: { id: string; name: string; coordinates: [number, number][]; isSelected: boolean }[] = [];
+
+      if (route.routes && route.routes.length > 0) {
+        for (const r of route.routes) {
+          if (r.geometry?.coordinates?.length) {
+            allRoutes.push({
+              id: r.id,
+              name: r.name,
+              coordinates: r.geometry.coordinates,
+              isSelected: r.id === selectedRouteId,
+            });
+          }
+        }
+      } else {
+        if (route.baseline_route_geometry?.coordinates?.length) {
+          allRoutes.push({
+            id: "shortest",
+            name: "Shortest Route",
+            coordinates: route.baseline_route_geometry.coordinates,
+            isSelected: selectedRouteId === "shortest",
+          });
+        }
+        if (route.route_geometry?.coordinates?.length) {
+          allRoutes.push({
+            id: "recommended",
+            name: "Recommended Route",
+            coordinates: route.route_geometry.coordinates,
+            isSelected: selectedRouteId === "recommended",
+          });
+        }
       }
 
-      // Safe / Recommended route in glowing neon green
-      if (route.route_geometry?.coordinates?.length) {
+      // If no route explicitly matched the selection, default the first one as selected
+      const hasSelected = allRoutes.some((r) => r.isSelected);
+      if (!hasSelected && allRoutes.length > 0) {
+        allRoutes[0].isSelected = true;
+      }
+
+      // 1. Render all unselected alternative routes in muted slate gray (never purple)
+      const unselectedRoutes = allRoutes.filter((r) => !r.isSelected);
+      unselectedRoutes.forEach((r) => {
         layers.push(
           new PathLayer({
-            id: "recommended-route-path",
-            data: [{ path: route.route_geometry.coordinates }],
+            id: `route-unselected-${r.id}`,
+            data: [{ path: r.coordinates }],
             getPath: (d: any) => d.path,
-            getColor:
-              selectedRouteId === "recommended"
-                ? [0, 255, 136, 255]
-                : [16, 185, 129, 160], // Emerald glow
-            getWidth: selectedRouteId === "recommended" ? 7.5 : 4.5,
+            getColor: [100, 116, 139, 130], // Muted slate gray
+            getWidth: 4,
+            widthMinPixels: 3,
+            capRounded: true,
+            jointRounded: true,
+          })
+        );
+      });
+
+      // 2. Render ONLY the actively selected route in glowing high-visibility purple
+      const selectedRoute = allRoutes.find((r) => r.isSelected);
+      if (selectedRoute) {
+        // Outer halo glow
+        layers.push(
+          new PathLayer({
+            id: `route-selected-glow-${selectedRoute.id}`,
+            data: [{ path: selectedRoute.coordinates }],
+            getPath: (d: any) => d.path,
+            getColor: [168, 85, 247, 90], // Neon purple halo
+            getWidth: 12,
+            widthMinPixels: 8,
+            capRounded: true,
+            jointRounded: true,
+          })
+        );
+
+        // Core high-contrast vibrant purple line
+        layers.push(
+          new PathLayer({
+            id: `route-selected-core-${selectedRoute.id}`,
+            data: [{ path: selectedRoute.coordinates }],
+            getPath: (d: any) => d.path,
+            getColor: [192, 132, 252, 255], // Electric bright purple
+            getWidth: 7.5,
             widthMinPixels: 5,
             capRounded: true,
+            jointRounded: true,
           })
         );
       }
     }
 
+    // 6. Start Point Pin (cyan dot with white ring + outer pulse ring)
+    layers.push(
+      new ScatterplotLayer({
+        id: "route-start-pin-outer",
+        data: [{ position: [routeStart.lng, routeStart.lat] }],
+        getPosition: (d: any) => d.position,
+        getFillColor: [0, 229, 255, 40],
+        getLineColor: [0, 229, 255, 160],
+        getRadius: 18,
+        radiusUnits: "pixels",
+        lineWidthMinPixels: 1.5,
+        stroked: true,
+        filled: true,
+        pickable: false,
+      })
+    );
+    layers.push(
+      new ScatterplotLayer({
+        id: "route-start-pin",
+        data: [{ position: [routeStart.lng, routeStart.lat] }],
+        getPosition: (d: any) => d.position,
+        getFillColor: [0, 229, 255, 255],
+        getLineColor: [255, 255, 255, 240],
+        getRadius: 10,
+        radiusUnits: "pixels",
+        lineWidthMinPixels: 2.5,
+        stroked: true,
+        filled: true,
+        pickable: false,
+      })
+    );
+
+    // 7. End Point Pin (emerald green dot with white ring)
+    const endCoord = routeEnd ?? (() => {
+      const infra = criticalInfra[0];
+      return infra ? { lat: infra.lat, lng: infra.lng } : null;
+    })();
+    if (endCoord) {
+      layers.push(
+        new ScatterplotLayer({
+          id: "route-end-pin-outer",
+          data: [{ position: [endCoord.lng, endCoord.lat] }],
+          getPosition: (d: any) => d.position,
+          getFillColor: [52, 211, 153, 40],
+          getLineColor: [52, 211, 153, 160],
+          getRadius: 18,
+          radiusUnits: "pixels",
+          lineWidthMinPixels: 1.5,
+          stroked: true,
+          filled: true,
+          pickable: false,
+        })
+      );
+      layers.push(
+        new ScatterplotLayer({
+          id: "route-end-pin",
+          data: [{ position: [endCoord.lng, endCoord.lat] }],
+          getPosition: (d: any) => d.position,
+          getFillColor: [52, 211, 153, 255],
+          getLineColor: [255, 255, 255, 240],
+          getRadius: 10,
+          radiusUnits: "pixels",
+          lineWidthMinPixels: 2.5,
+          stroked: true,
+          filled: true,
+          pickable: false,
+        })
+      );
+    }
+
     overlayRef.current.setProps({ layers });
-  }, [simulateResult, criticalInfra, route, selectedRouteId, layerVisibility]);
+  }, [simulateResult, criticalInfra, route, selectedRouteId, layerVisibility, mapZoom, routeStart, routeEnd]);
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#061120]">
       {/* MapLibre Canvas */}
-      <div ref={containerRef} className="absolute inset-0 z-0" />
+      <div
+        ref={containerRef}
+        className="absolute inset-0 z-0"
+        style={{ cursor: isPicking ? "crosshair" : undefined }}
+      />
 
-      {/* 1. Top Pill Navigation & Search Bar */}
-      <div className="absolute top-3 inset-x-4 z-20 flex items-center justify-between gap-3 pointer-events-none">
-        {/* Pills */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg pointer-events-auto overflow-x-auto">
-          {mapPills.map((pill) => {
-            const isActive = activeMapPill === pill;
-            return (
-              <button
-                key={pill}
-                onClick={() => setActiveMapPill(pill)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                  isActive
-                    ? "bg-[#0091ea] text-white shadow-[0_0_10px_rgba(0,145,234,0.5)] border border-[#40c4ff]"
-                    : "text-slate-300 hover:text-white hover:bg-[#0c233d]"
-                }`}
-              >
-                {pill}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Search Input & Fullscreen */}
-        <div className="flex items-center gap-2 pointer-events-auto">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg text-xs text-slate-300 w-64">
-            <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      {/* Picking banner — shown for either start or end picking mode */}
+      {isPicking && (
+        <div className="absolute top-16 inset-x-0 flex justify-center z-30 pointer-events-none">
+          <div className={`flex items-center gap-2.5 px-4 py-2.5 rounded-2xl backdrop-blur-md font-bold text-xs pointer-events-auto border shadow-lg ${
+            isPickingStartOnMap
+              ? "bg-[#00e5ff]/15 border-[#00e5ff]/60 text-[#00e5ff] shadow-[0_0_20px_rgba(0,229,255,0.3)]"
+              : "bg-emerald-400/15 border-emerald-400/60 text-emerald-300 shadow-[0_0_20px_rgba(52,211,153,0.3)]"
+          }`}>
+            <svg className="w-4 h-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="10" r="3" strokeWidth={2} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 2C8.134 2 5 5.134 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.866-3.134-7-7-7z" />
             </svg>
-            <input
-              type="text"
-              placeholder="Search location, hospital, or area..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent focus:outline-none w-full text-slate-100 placeholder-slate-500 text-xs"
-            />
+            {isPickingStartOnMap
+              ? "Click anywhere to set your START point 🔵"
+              : "Click anywhere to set your DESTINATION 🟢"}
+            <button
+              onClick={() => { setIsPickingStartOnMap(false); setIsPickingEndOnMap(false); }}
+              className="ml-1 opacity-70 hover:opacity-100 transition-opacity text-sm leading-none"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Fullscreen Top Nav: same 3 tabs as left sidebar ── */}
+      {isFullscreen && (
+        <div className="absolute top-3 inset-x-4 z-20 flex items-center justify-between gap-3 pointer-events-none">
+          {/* Tab pills */}
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg pointer-events-auto">
+            {fsTabs.map((tab) => {
+              const isActive = fsPanelOpen && fsTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    if (fsPanelOpen && fsTab === tab.id) {
+                      setFsPanelOpen(false);
+                    } else {
+                      setFsTab(tab.id);
+                      setFsPanelOpen(true);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                    isActive
+                      ? "bg-[#0091ea] text-white shadow-[0_0_10px_rgba(0,145,234,0.5)] border border-[#40c4ff]"
+                      : "text-slate-300 hover:text-white hover:bg-[#0c233d]"
+                  }`}
+                >
+                  <span>{tab.icon}</span>
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          <button
-            onClick={() => {
-              if (document.fullscreenElement) {
-                document.exitFullscreen();
-              } else {
-                containerRef.current?.parentElement?.requestFullscreen();
-              }
-            }}
-            title="Toggle Fullscreen"
-            className="w-8 h-8 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] text-slate-300 hover:text-white flex items-center justify-center transition-all shadow-lg"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
-          </button>
+          {/* Search + close panel + exit fullscreen */}
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] shadow-lg text-xs text-slate-300 w-56">
+              <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search location or area..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-transparent focus:outline-none w-full text-slate-100 placeholder-slate-500 text-xs"
+              />
+            </div>
+            <button
+              onClick={() => document.exitFullscreen()}
+              title="Exit Fullscreen"
+              className="w-8 h-8 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] text-slate-300 hover:text-white flex items-center justify-center transition-all shadow-lg"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4m0 0H4m5 0L3 10m12-1V4m0 0h5m-5 0l6 6M9 20v-5m0 0H4m5 0l-6 6m12-1v5m0 0h5m-5 0l6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* 2. Floating Map Layers & Legend Panel (Top Left) */}
-      <div className="absolute top-16 left-4 z-20 w-48 rounded-xl bg-[#071526]/95 backdrop-blur-md border border-[#142e4c] p-3 shadow-xl select-none">
+      {/* ── Fullscreen slide-in right panel ── */}
+      {isFullscreen && fsPanelOpen && (
+        <div className="absolute top-14 right-0 bottom-0 w-80 z-30 flex flex-col bg-[#071326]/98 backdrop-blur-md border-l border-[#11263d] shadow-2xl">
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#11263d] bg-[#09182b]">
+            <span className="text-xs font-bold text-slate-100">
+              {fsTabs.find((t) => t.id === fsTab)?.icon}{" "}
+              {fsTabs.find((t) => t.id === fsTab)?.label}
+            </span>
+            <button
+              onClick={() => setFsPanelOpen(false)}
+              className="text-slate-400 hover:text-white text-lg leading-none"
+            >
+              ✕
+            </button>
+          </div>
+          {/* Panel content */}
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5">
+            {fsTab === "routing" ? (
+              <RouteComparisonPanel />
+            ) : fsTab === "scenarios" ? (
+              <ScenarioSlider />
+            ) : (
+              <div className="space-y-3">
+                <UncertaintyPanel />
+                <ExplainabilityPanel />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen button (visible only in normal view, top-right) */}
+      {!isFullscreen && (
+        <button
+          onClick={() => containerRef.current?.parentElement?.requestFullscreen()}
+          title="Enter Fullscreen"
+          className="absolute top-3 right-4 z-20 w-8 h-8 rounded-xl bg-[#071526]/90 backdrop-blur-md border border-[#142e4c] text-slate-300 hover:text-[#00e5ff] hover:border-[#00e5ff]/50 flex items-center justify-center transition-all shadow-lg"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+        </button>
+      )}
+
+      {/* Layers & Legend Panel */}
+      <div className={`absolute ${isFullscreen ? "top-16" : "top-3"} left-4 z-20 w-48 rounded-xl bg-[#071526]/95 backdrop-blur-md border border-[#142e4c] p-3 shadow-xl select-none`}>
         <div className="flex items-center justify-between pb-1.5 border-b border-[#142e4c]">
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
             Map Layers
@@ -416,6 +798,18 @@ export default function MapView() {
                   <span className="text-slate-300">Emergency Vehicle</span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-1 rounded-xs bg-[#c084fc] shadow-[0_0_6px_rgba(192,132,252,0.8)]" />
+                  <span className="text-slate-300">Selected Route</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#00e5ff] border-2 border-white" />
+                  <span className="text-slate-300">Start Point</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-white" />
+                  <span className="text-slate-300">End / Destination</span>
+                </div>
+                <div className="flex items-center gap-2">
                   <span className="text-red-400 text-xs">⚠️</span>
                   <span className="text-slate-300">Critical Zone</span>
                 </div>
@@ -425,83 +819,7 @@ export default function MapView() {
         )}
       </div>
 
-      {/* 3. Floating Map Callout Annotations */}
-      {/* Callout 1: Origin "Your Location | HSR Layout" */}
-      <div className="absolute top-[68%] left-[42%] -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center">
-        <div className="px-2.5 py-1 rounded-lg bg-[#07182c]/95 border border-[#0091ea] text-white text-[11px] font-semibold shadow-[0_0_15px_rgba(0,145,234,0.4)] flex items-center gap-1.5 mb-1">
-          <span className="w-2 h-2 rounded-full bg-[#0091ea] animate-ping" />
-          <span>Your Location</span>
-          <span className="text-slate-400 font-normal">HSR Layout</span>
-        </div>
-        <div className="w-3.5 h-3.5 rounded-full bg-[#0091ea] ring-4 ring-[#0091ea]/30 shadow-lg" />
-      </div>
 
-      {/* Callout 2: Moving Live Ambulance on Route */}
-      {layerVisibility.liveVehicles && (
-        <div className="absolute top-[58%] left-[48%] z-20 pointer-events-none animate-bounce flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#0a2744] border border-[#00e5ff]/50 shadow-md">
-          <span className="text-sm">🚑</span>
-          <span className="text-[9px] text-cyan-200 font-bold uppercase tracking-wider">
-            {vehicleType}
-          </span>
-        </div>
-      )}
-
-      {/* Callout 3: Road Flooded Hazard Box near Bellandur ORR */}
-      <div className="absolute top-[52%] left-[62%] -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center">
-        <div className="px-3 py-1.5 rounded-xl bg-red-950/95 border border-red-500 text-white text-[11px] font-bold shadow-[0_0_15px_rgba(239,68,68,0.5)] flex items-center gap-2 mb-1">
-          <span className="text-sm">⚠️</span>
-          <div>
-            <div className="leading-tight text-red-200">Road Flooded</div>
-            <div className="text-[10px] text-red-400 font-mono font-normal leading-tight">
-              Water level ~ 45 cm
-            </div>
-          </div>
-        </div>
-        <div className="w-2.5 h-2.5 bg-red-500 rotate-45 -mt-2" />
-      </div>
-
-      {/* Callout 4: Destination "Manipal Hospital" */}
-      <div className="absolute top-[34%] left-[60%] -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center">
-        <div className="px-3 py-1.5 rounded-xl bg-emerald-950/95 border border-[#00FF88] text-white text-[11px] font-bold shadow-[0_0_15px_rgba(0,255,136,0.4)] flex items-center gap-2 mb-1">
-          <span className="text-base">🏥</span>
-          <div>
-            <div className="leading-tight text-white">Manipal Hospital</div>
-            <div className="text-[10px] text-emerald-300 font-mono font-normal leading-tight">
-              12.4 km &bull; 28 min
-            </div>
-          </div>
-        </div>
-        <div className="w-3 h-3 rounded-full bg-[#00FF88] ring-4 ring-[#00FF88]/30 shadow-lg" />
-      </div>
-
-      {/* Area Label Hotspots on Map */}
-      <div className="absolute top-[28%] left-[38%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        ⚠️ Yelahanka
-      </div>
-      <div className="absolute top-[38%] left-[44%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        Hebbal
-      </div>
-      <div className="absolute top-[44%] left-[35%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        ⚠️ Peenya
-      </div>
-      <div className="absolute top-[50%] left-[46%] text-sm font-black text-white pointer-events-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-        Bengaluru
-      </div>
-      <div className="absolute top-[58%] left-[39%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        Koramangala
-      </div>
-      <div className="absolute top-[57%] left-[58%] text-[11px] font-bold text-red-300 pointer-events-none drop-shadow">
-        ⚠️ Bellandur
-      </div>
-      <div className="absolute top-[44%] left-[54%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        Marathahalli
-      </div>
-      <div className="absolute top-[46%] left-[68%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        Whitefield
-      </div>
-      <div className="absolute top-[68%] left-[57%] text-[11px] font-bold text-slate-300/90 pointer-events-none drop-shadow">
-        Electronic City
-      </div>
 
       {/* 4. Bottom Right Overlays: Compass, Gradient Bar & Scale */}
       <div className="absolute bottom-4 right-4 z-20 flex flex-col items-end gap-2.5 pointer-events-auto select-none">

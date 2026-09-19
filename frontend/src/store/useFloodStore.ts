@@ -33,6 +33,14 @@ interface FloodStore {
   selectedRouteId: string;
   vehicleType: VehicleType;
   selectedNodeId: string | null;
+  // Route start
+  routeStart: LatLng;
+  routeStartLabel: string;
+  isPickingStartOnMap: boolean;
+  // Route end
+  routeEnd: LatLng | null;
+  routeEndLabel: string;
+  isPickingEndOnMap: boolean;
   currentRainfall: { intensity: number; duration: number };
   weatherNowcast: WeatherNowcastResponse | null;
   layerVisibility: LayerVisibility;
@@ -46,7 +54,17 @@ interface FloodStore {
   loadWeather: () => Promise<void>;
   runScenario: (scenarioId: string) => Promise<void>;
   runCustomRainfall: (intensity: number, duration: number, presetId?: string | null) => Promise<void>;
-  computeRoute: (start: LatLng, end: LatLng, vehicle?: VehicleType) => Promise<void>;
+  computeRoute: (
+    start: LatLng,
+    end: LatLng,
+    vehicle?: VehicleType,
+    startLabel?: string,
+    endLabel?: string
+  ) => Promise<void>;
+  setRouteStart: (coord: LatLng, label?: string) => void;
+  setRouteEnd: (coord: LatLng, label?: string) => void;
+  setIsPickingStartOnMap: (picking: boolean) => void;
+  setIsPickingEndOnMap: (picking: boolean) => void;
   setVehicleType: (vt: VehicleType) => void;
   setSelectedRouteId: (id: string) => void;
   setActiveNav: (nav: string) => void;
@@ -66,6 +84,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   selectedRouteId: "recommended",
   vehicleType: "ambulance",
   selectedNodeId: null,
+  routeStart: { lat: 12.9185, lng: 77.6590 },
+  routeStartLabel: "HSR Layout, Bengaluru",
+  isPickingStartOnMap: false,
+  routeEnd: null,
+  routeEndLabel: "Manipal Hospital, Old Airport Rd",
+  isPickingEndOnMap: false,
   currentRainfall: { intensity: 78, duration: 90 },
   weatherNowcast: null,
   layerVisibility: {
@@ -124,7 +148,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     });
     try {
       const result = await api.getScenarioDetail(scenarioId);
-      set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
+      set({ simulateResult: result, activeScenarioId: result.scenario_id });
+      // Automatically recalculate route for the new flood scenario
+      const { routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel } = get();
+      if (routeStart && routeEnd) {
+        await get().computeRoute(routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel);
+      }
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
@@ -141,7 +170,12 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     });
     try {
       const result = await api.simulate(intensity, duration);
-      set({ simulateResult: result, activeScenarioId: result.scenario_id, route: null });
+      set({ simulateResult: result, activeScenarioId: result.scenario_id });
+      // Automatically recalculate route for the new flood scenario
+      const { routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel } = get();
+      if (routeStart && routeEnd) {
+        await get().computeRoute(routeStart, routeEnd, vehicleType, routeStartLabel, routeEndLabel);
+      }
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
@@ -149,11 +183,26 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     }
   },
 
-  computeRoute: async (start: LatLng, end: LatLng, vehicle?: VehicleType) => {
+  computeRoute: async (
+    start: LatLng,
+    end: LatLng,
+    vehicle?: VehicleType,
+    startLabel?: string,
+    endLabel?: string
+  ) => {
     const scenarioId = get().activeScenarioId;
     if (!scenarioId) return;
     const vt = vehicle ?? get().vehicleType;
-    set({ loading: true, error: null });
+    set({
+      loading: true,
+      error: null,
+      routeStart: start,
+      routeEnd: end,
+      ...(startLabel ? { routeStartLabel: startLabel } : {}),
+      ...(endLabel ? { routeEndLabel: endLabel } : {}),
+      isPickingStartOnMap: false,
+      isPickingEndOnMap: false,
+    });
     try {
       const route = await api.route(start, end, scenarioId, "astar", vt);
       set({ route, selectedRouteId: "recommended" });
@@ -164,12 +213,32 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
     }
   },
 
+  setRouteStart: (coord: LatLng, label?: string) => {
+    set({
+      routeStart: coord,
+      routeStartLabel: label || `Location (${coord.lat.toFixed(4)}, ${coord.lng.toFixed(4)})`,
+      isPickingStartOnMap: false,
+    });
+  },
+
+  setRouteEnd: (coord: LatLng, label?: string) => {
+    set({
+      routeEnd: coord,
+      routeEndLabel: label || `Location (${coord.lat.toFixed(4)}, ${coord.lng.toFixed(4)})`,
+      isPickingEndOnMap: false,
+    });
+  },
+
+  setIsPickingStartOnMap: (isPickingStartOnMap: boolean) =>
+    set({ isPickingStartOnMap, ...(isPickingStartOnMap ? { isPickingEndOnMap: false } : {}) }),
+
+  setIsPickingEndOnMap: (isPickingEndOnMap: boolean) =>
+    set({ isPickingEndOnMap, ...(isPickingEndOnMap ? { isPickingStartOnMap: false } : {}) }),
+
   setVehicleType: (vehicleType: VehicleType) => {
     set({ vehicleType });
     const currentRoute = get().route;
     if (currentRoute) {
-      // Re-trigger with new vehicle type if locations known or adjust ETA locally
-      const factor = vehicleType === "fire" ? 1.14 : vehicleType === "rescue" ? 1.33 : vehicleType === "police" ? 0.95 : 1.0;
       set({
         route: {
           ...currentRoute,
@@ -187,4 +256,3 @@ export const useFloodStore = create<FloodStore>((set, get) => ({
   toggleLayer: (key: keyof LayerVisibility) =>
     set((state) => ({ layerVisibility: { ...state.layerVisibility, [key]: !state.layerVisibility[key] } })),
 }));
-

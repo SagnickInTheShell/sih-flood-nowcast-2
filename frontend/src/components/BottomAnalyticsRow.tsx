@@ -1,7 +1,12 @@
 import React from "react";
 import { useFloodStore } from "../store/useFloodStore";
 
-export default function BottomAnalyticsRow() {
+interface Props {
+  isCollapsed: boolean;
+  onToggle: () => void;
+}
+
+export default function BottomAnalyticsRow({ isCollapsed, onToggle }: Props) {
   const weatherNowcast = useFloodStore((s) => s.weatherNowcast);
   const simulateResult = useFloodStore((s) => s.simulateResult);
   const currentRainfall = useFloodStore((s) => s.currentRainfall);
@@ -51,7 +56,29 @@ export default function BottomAnalyticsRow() {
   const floodedDash = (floodedPct / 100) * circumference;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 px-5 py-2.5 bg-[#061120] border-t border-[#11263d]">
+    <div className="bg-[#061120] border-t border-[#11263d]">
+      {/* Toggle header */}
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-5 py-1 text-[10px] font-semibold text-slate-400 hover:text-slate-200 hover:bg-[#0d223a]/30 transition-colors"
+      >
+        <div className="flex items-center gap-4">
+          <span className="font-bold text-white text-xs">📈 Analytics</span>
+          {isCollapsed && (
+            <span className="flex items-center gap-3 text-[11px] font-mono">
+              <span className="text-[#00e5ff]">{forecastData[1].value} mm/hr (+1h)</span>
+              <span className="text-red-400">{liveAlerts.filter(a => a.type === "red").length} critical alerts</span>
+              <span className="text-amber-400">{floodedPct}% roads flooded</span>
+            </span>
+          )}
+        </div>
+        <svg className={`w-3.5 h-3.5 transition-transform ${isCollapsed ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {!isCollapsed && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 px-5 pb-3">
       {/* 1. Rainfall Forecast (Next 3 Hours) */}
       <div className="bg-[#0c1e33] border border-[#173454] rounded-xl p-3 flex flex-col justify-between shadow-md">
         <div>
@@ -259,6 +286,8 @@ export default function BottomAnalyticsRow() {
           </div>
         </div>
       </div>
+        </div>
+      )}
     </div>
   );
 }

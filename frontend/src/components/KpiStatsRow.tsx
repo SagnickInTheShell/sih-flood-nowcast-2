@@ -1,7 +1,12 @@
 import React from "react";
 import { useFloodStore } from "../store/useFloodStore";
 
-export default function KpiStatsRow() {
+interface Props {
+  isCollapsed: boolean;
+  onToggle: () => void;
+}
+
+export default function KpiStatsRow({ isCollapsed, onToggle }: Props) {
   const currentRainfall = useFloodStore((s) => s.currentRainfall);
   const simulateResult = useFloodStore((s) => s.simulateResult);
   const criticalInfra = useFloodStore((s) => s.criticalInfra);
@@ -24,7 +29,31 @@ export default function KpiStatsRow() {
   const vsLastHour = weatherNowcast?.vs_last_hour_pct ?? 42;
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5 px-5 py-3 bg-[#061120] border-b border-[#11263d]">
+    <div className="bg-[#061120] border-b border-[#11263d]">
+      {/* Collapse toggle header */}
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-5 py-1 text-[10px] font-semibold text-slate-400 hover:text-slate-200 hover:bg-[#0d223a]/30 transition-colors"
+      >
+        <div className="flex items-center gap-4">
+          <span className="font-bold text-white text-xs">📊 Live Stats</span>
+          {isCollapsed && (
+            <span className="flex items-center gap-3 text-[11px] font-mono">
+              <span className="text-[#00e5ff]">🌧 {rainfallVal} mm/hr</span>
+              <span className="text-red-400">⚠️ {highRiskZones} zones</span>
+              <span className="text-slate-300">🛣 {floodedCount} flooded</span>
+              <span className="text-amber-400">🏥 {facilitiesAtRisk} at risk</span>
+            </span>
+          )}
+        </div>
+        <svg className={`w-3.5 h-3.5 transition-transform ${isCollapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {/* Expandable grid */}
+      {!isCollapsed && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 px-5 pb-3">
       {/* 1. Rainfall Nowcast */}
       <div className="bg-[#0c1e33] border border-[#173454] hover:border-[#00e5ff]/50 rounded-xl p-3.5 flex items-center justify-between shadow-md transition-all">
         <div className="flex items-center gap-3">
@@ -152,6 +181,8 @@ export default function KpiStatsRow() {
           <div className="w-1.5 h-10 rounded-sm bg-amber-300 shadow-[0_0_8px_#f59e0b]" />
         </div>
       </div>
+        </div>
+      )}
     </div>
   );
 }
